@@ -1,0 +1,142 @@
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background: #0f172a;
+  color: #e2e8f0;
+  font-family: "PingFang SC", "Helvetica Neue", Arial, sans-serif;
+}
+
+.page {
+  max-width: 900px;
+  margin: 0 auto;
+  padding: 28px 16px 64px;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 20px;
+}
+
+.header h1 {
+  margin: 0;
+  font-size: 20px;
+}
+
+.conn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: #94a3b8;
+}
+
+.conn .dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
+.conn.ok .dot {
+  background: #22c55e;
+}
+
+.conn.down .dot {
+  background: #ef4444;
+}
+
+.empty {
+  color: #64748b;
+  font-size: 14px;
+  padding: 48px 0;
+  text-align: center;
+}
+
+/* ---- mounted projects (subtle) ---- */
+.projects {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: -8px 0 16px;
+}
+
+.projects-label {
+  font-size: 12px;
+  color: #64748b;
+}
+
+.projects-chip {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  color: #94a3b8;
+  background: #1e293b;
+  border: 1px solid #273244;
+  border-radius: 999px;
+  padding: 1px 10px;
+}
+
+.empty code {
+  color: #fbbf24;
+  background: #1e293b;
+  padding: 2px 6px;
+  border-radius: 6px;
+}
+
+.file {
+  background: #1e293b;
+  border: 1px solid #334155;
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.file-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  border-bottom: 1px solid #334155;
+  background: #16213a;
+  flex-wrap: wrap;
+}
+
+.lang {
+  font-size: 11px;
+  font-weight: 700;
+  border-radius: 6px;
+  padding: 2px 8px;
+  background: #0ea5e9;
+  color: #082f49;
+}
+
+.filename {
+  font-family: ui-monospace, Menlo, monospace;
+  font-size: 13px;
+  color: #fbbf24;
+}
+
+.file-head time {
+  margin-left: auto;
+  font-size: 12px;
+  color: #64748b;
+  font-family: ui-monospace, Menlo, monospace;
+}
+
+.code {
+  margin: 0;
+  padding: 16px;
+  overflow: auto;
+}
+
+.code code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 13px;
+  line-height: 1.6;
+  white-space: pre;
+  color: #d7dce4;
+}

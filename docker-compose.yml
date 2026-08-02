@@ -1,0 +1,38 @@
+services:
+  shishan:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      # 代理构建参数——只有设置了对应环境变量才会注入（构建阶段内 apk/npm/pip 联网用）
+      args:
+        http_proxy: ${HTTP_PROXY:-}
+        https_proxy: ${HTTPS_PROXY:-}
+        all_proxy: ${ALL_PROXY:-}
+    image: shishan-mcp:local
+    container_name: shishan-mcp
+    # 多项目挂载：宿主机项目目录 -> /workspace/<目录名>，两边目录名必须一致。
+    # PROJECT_A/B 是宿主机项目绝对路径，HOST_CODE_ROOT 是它们的共同父目录。
+    # DATA_DIR 是宿主机数据目录（存放项目产生的数据/日志），挂载为 /data（可写）。
+    # 代码挂载是只读的（:ro），数据挂载可写。
+    # 例（两个项目都在 /Users/you/projects 下）：
+    #   PROJECT_A=/Users/you/projects/proj-a \
+    #   PROJECT_B=/Users/you/projects/proj-b \
+    #   HOST_CODE_ROOT=/Users/you/projects \
+    #   DATA_DIR=/Users/you/projects/shishan-data \
+    #   docker compose up --build
+    volumes:
+      - ${PROJECT_A:?设置 PROJECT_A=<宿主机项目绝对路径>}:/workspace/proj-a:ro
+      - ${PROJECT_B:?设置 PROJECT_B=<宿主机项目绝对路径>}:/workspace/proj-b:ro
+      - ${DATA_DIR:?设置 DATA_DIR=<宿主机数据目录>}:/data
+    environment:
+      - NODE_ENV=production
+      - MCP_SERVER_NAME=shishan-mcp-server
+      - CODE_ROOT=/workspace
+      - HOST_CODE_ROOT=${HOST_CODE_ROOT:?设置 HOST_CODE_ROOT=<项目共同父目录>}
+      - DATA_ROOT=/data
+      - HOST_DATA_ROOT=${DATA_DIR:?设置 DATA_DIR=<宿主机数据目录>}
+    ports:
+      - "8080:80"    # MCP 调试控制台（工具调用日志）
+      - "8081:81"    # MCP 功能页（代码查看）
+      - "3000:3000"  # MCP Server（LLM 客户端直连，Streamable HTTP @ /）
+    restart: unless-stopped

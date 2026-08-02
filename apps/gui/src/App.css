@@ -1,0 +1,535 @@
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: "PingFang SC", "Helvetica Neue", Arial, sans-serif;
+  background: #0f172a;
+  color: #e2e8f0;
+}
+
+.page {
+  max-width: 1280px;
+  margin: 0 auto;
+  padding: 32px 16px 64px;
+}
+
+.header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 20px;
+}
+
+.header h1 {
+  margin: 0;
+  font-size: 22px;
+}
+
+.health {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: #94a3b8;
+}
+
+.dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  display: inline-block;
+}
+
+.dot.ok {
+  background: #22c55e;
+}
+
+.dot.down {
+  background: #ef4444;
+}
+
+.mcp-hint {
+  margin-left: 12px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  background: #1e293b;
+  font-family: ui-monospace, Menlo, monospace;
+  font-size: 12px;
+}
+
+.card {
+  background: #1e293b;
+  border: 1px solid #334155;
+  border-radius: 12px;
+  padding: 18px;
+  margin-bottom: 16px;
+}
+
+.input-card {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.input-card label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 13px;
+  color: #94a3b8;
+}
+
+.input-card textarea,
+.input-card input {
+  background: #0f172a;
+  border: 1px solid #334155;
+  border-radius: 8px;
+  color: #e2e8f0;
+  padding: 10px;
+  font-size: 14px;
+  font-family: inherit;
+  resize: vertical;
+}
+
+.actions {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.actions button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  background: #0ea5e9;
+  color: #082f49;
+  border: none;
+  border-radius: 8px;
+  padding: 10px 14px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.actions button:hover:not(:disabled) {
+  background: #38bdf8;
+}
+
+.actions button:disabled {
+  opacity: 0.5;
+  cursor: wait;
+}
+
+.badge {
+  font-size: 11px;
+  font-weight: 800;
+  border-radius: 6px;
+  padding: 2px 6px;
+  letter-spacing: 0.5px;
+}
+
+.badge-typescript {
+  background: #3178c6;
+  color: #fff;
+}
+
+.badge-python {
+  background: #3776ab;
+  color: #ffd43b;
+}
+
+.badge-c\+\+ {
+  background: #f34b7d;
+  color: #fff;
+}
+
+.output pre {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.result {
+  color: #86efac;
+}
+
+.error {
+  color: #fca5a5;
+}
+
+.muted {
+  color: #64748b;
+  font-size: 14px;
+}
+
+/* ---- mounted projects (subtle) ---- */
+.projects {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: -6px 0 16px;
+  padding: 0 2px;
+}
+
+.projects-label {
+  font-size: 12px;
+  color: #64748b;
+}
+
+.projects-chip {
+  font-family: ui-monospace, Menlo, monospace;
+  font-size: 12px;
+  color: #94a3b8;
+  background: #1e293b;
+  border: 1px solid #273244;
+  border-radius: 999px;
+  padding: 1px 10px;
+}
+
+/* ---- tool call log ---- */
+.calls-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.calls-head h2 {
+  margin: 0;
+  font-size: 16px;
+}
+
+.calls-controls {
+  display: flex;
+  gap: 8px;
+}
+
+button.ghost {
+  background: transparent;
+  border: 1px solid #334155;
+  color: #94a3b8;
+  border-radius: 8px;
+  padding: 6px 12px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+button.ghost:hover {
+  background: #0f172a;
+  color: #e2e8f0;
+}
+
+button.ghost.danger:hover {
+  border-color: #ef4444;
+  color: #fca5a5;
+}
+
+.call-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.call {
+  border: 1px solid #334155;
+  border-radius: 10px;
+  padding: 10px 12px;
+  background: #0f172a;
+}
+
+.call.error {
+  border-color: #7f1d1d;
+}
+
+.call-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.source {
+  font-size: 11px;
+  font-weight: 700;
+  border-radius: 6px;
+  padding: 2px 8px;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+}
+
+.source-mcp {
+  background: #7c3aed;
+  color: #ede9fe;
+}
+
+.source-rest {
+  background: #0891b2;
+  color: #cffafe;
+}
+
+.tool-name {
+  font-family: ui-monospace, Menlo, monospace;
+  font-size: 13px;
+  color: #fbbf24;
+}
+
+.duration {
+  font-size: 12px;
+  color: #64748b;
+  font-family: ui-monospace, Menlo, monospace;
+}
+
+.state {
+  font-size: 11px;
+  font-weight: 700;
+  border-radius: 6px;
+  padding: 2px 8px;
+}
+
+.state.success {
+  background: #14532d;
+  color: #86efac;
+}
+
+.state.error {
+  background: #7f1d1d;
+  color: #fca5a5;
+}
+
+.time {
+  margin-left: auto;
+  font-size: 12px;
+  color: #64748b;
+  font-family: ui-monospace, Menlo, monospace;
+}
+
+.call-bodies {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+}
+
+.call-bodies .json {
+  flex: 1 1 240px;
+}
+
+.json summary {
+  cursor: pointer;
+  font-size: 12px;
+  color: #94a3b8;
+  user-select: none;
+}
+
+.json pre {
+  margin: 6px 0 0;
+  max-height: 240px;
+  overflow: auto;
+  background: #111827;
+  border: 1px solid #1f2937;
+  border-radius: 8px;
+  padding: 8px;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+/* ---- layout: left tools sidebar, right call log ---- */
+.layout {
+  display: grid;
+  grid-template-columns: 320px 1fr;
+  gap: 16px;
+  align-items: start;
+}
+
+.sidebar {
+  position: sticky;
+  top: 16px;
+  max-height: calc(100vh - 120px);
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.sidebar-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  padding: 0 2px;
+}
+
+.sidebar-head h2 {
+  margin: 0;
+  font-size: 16px;
+}
+
+.sidebar-head .muted {
+  font-size: 12px;
+}
+
+.tool-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.tool-card {
+  background: #1e293b;
+  border: 1px solid #334155;
+  border-radius: 12px;
+  padding: 12px 14px;
+}
+
+.tool-card .tool-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.tool-card .tool-name {
+  font-size: 15px;
+  color: #fbbf24;
+}
+
+.tool-desc {
+  margin: 8px 0;
+  font-size: 13px;
+  line-height: 1.6;
+  color: #cbd5e1;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.tool-card .json summary {
+  color: #38bdf8;
+}
+
+/* ---- manual tool invocation ---- */
+.tool-params {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 10px 0 12px;
+}
+
+.tool-params .param {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.param-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.param-label code {
+  font-family: ui-monospace, Menlo, monospace;
+  font-size: 12px;
+  color: #e2e8f0;
+}
+
+.param-label em {
+  font-style: normal;
+  font-size: 10px;
+  border-radius: 5px;
+  padding: 1px 5px;
+}
+
+.param-label .req {
+  background: #7f1d1d;
+  color: #fca5a5;
+}
+
+.param-label .ptype {
+  background: #1e293b;
+  color: #64748b;
+}
+
+.tool-params input[type="text"] {
+  width: 100%;
+  background: #0f172a;
+  border: 1px solid #334155;
+  border-radius: 7px;
+  color: #e2e8f0;
+  padding: 7px 10px;
+  font-size: 13px;
+  font-family: inherit;
+}
+
+.tool-params input[type="text"]:focus {
+  outline: none;
+  border-color: #0ea5e9;
+}
+
+.tool-params input[type="checkbox"] {
+  accent-color: #0ea5e9;
+}
+
+.tool-run {
+  margin: 4px 0 10px;
+}
+
+button.ghost.run {
+  width: 100%;
+  border-color: #0ea5e9;
+  color: #38bdf8;
+  font-weight: 600;
+}
+
+button.ghost.run:hover:not(:disabled) {
+  background: #0ea5e9;
+  color: #082f49;
+}
+
+button.ghost.run:disabled {
+  opacity: 0.5;
+  cursor: wait;
+}
+
+.tool-error {
+  margin: 0 0 8px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: #fca5a5;
+  background: #1c1917;
+  border: 1px solid #7f1d1d;
+  border-radius: 8px;
+  padding: 8px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.main {
+  min-width: 0;
+}
+
+@media (max-width: 1024px) {
+  .layout {
+    grid-template-columns: 1fr;
+  }
+
+  .sidebar {
+    position: static;
+    max-height: none;
+  }
+}
+
+@media (max-width: 900px) {
+  .page {
+    padding: 20px 12px 48px;
+  }
+}

@@ -1,0 +1,6 @@
+# Add your Python pip dependencies here.
+# In Docker these are installed into /opt/venv automatically; in local dev you
+# can create a venv yourself (see README).
+#
+#   numpy==2.0.0
+#   scipy==1.14.0
