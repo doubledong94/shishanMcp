@@ -11,8 +11,7 @@ LLM 客户端 ──► MCP Streamable HTTP(/)
              ├─ src/tools/index.ts        ← 自动扫描加载 *.tool.ts（不需要你维护）
              ├─ src/tools/xxx.tool.ts     ← 你新增的 MCP 工具（一个文件搞定）
              ├─ src/tools/registry.ts     ← 自注册表（工具文件 registerTool 进去）
-             ├─ src/core/tool-service.ts  ← 可选：多个工具/网页共用的业务逻辑
-             └─ src/core/*.service.ts     ← 具体实现（读文件、调 Python/C++ 等）
+             └─ src/core/*.service.ts     ← 具体实现（tree-sitter、scip、Neo4j 等）
 ```
 
 一个工具 = **一个 `ToolSpec`（定义 AI 看到的 name/description/parameters）+ 一个 `@Tool()` 方法 + 一行 `registerTool()`**。
@@ -39,7 +38,7 @@ export const SumToolSpec: ToolSpec = {
   }),
 };
 
-// 2) 工具类：简单逻辑直接内联；复杂/多工具共用逻辑调 ToolService
+// 2) 工具类：简单逻辑直接内联；复杂逻辑注入 core/ 下的 service 调用
 @Injectable()
 export class SumTool {
   constructor(private readonly calls: CallLogService) {}
@@ -50,7 +49,7 @@ export class SumTool {
     parameters: SumToolSpec.parameters,
   })
   async run(input: { a: number; b: number }) {
-    // calls.track 记录到 8080 调试控制台（来源标 mcp）
+    // calls.track 记录到 18080 调试控制台（来源标 mcp）
     return this.calls.track("sum_two_numbers", "mcp", input, () => ({
       sum: input.a + input.b,
     }));
@@ -74,13 +73,13 @@ cd ../.. && ./scripts/deploy.sh <你的挂载项目>  # 重建 + 重启（自动
 | --- | --- |
 | 文件必须导出 `ToolSpec` 常量 | 装饰器和"可用工具"展示共用，**单一来源**，保证展示 = AI 收到的内容 |
 | 文件末尾必须 `registerTool({ cls, spec })` | 否则工具不上线，也不会出现在"可用工具" |
-| 简单逻辑直接内联 | 不需要动 `tool-service.ts` |
-| 多工具 / 网页共用的逻辑放 `ToolService` | 工具类里 `this.tools.xxx()` 调用即可 |
-| 每个工具要 `calls.track(...)` | 否则 8080 调试控制台看不到调用记录 |
+| 简单逻辑直接内联 | 不需要额外 service |
+| 复用逻辑抽到 `core/` 下的 service | 工具类构造器直接注入，例如 `GraphService`、`TreeSitterService` |
+| 每个工具要 `calls.track(...)` | 否则 18080 调试控制台看不到调用记录 |
 | 参数用 zod | `parameters` 用 `z.object({...})`，每个字段 `.describe()`，AI 靠这些描述决定怎么调用 |
 
 ## 验证
 
-- 8080 调试控制台左侧"可用工具"自动出现 `sum_two_numbers`，含完整 description + inputSchema。
+- 18080 调试控制台左侧"可用工具"自动出现 `sum_two_numbers`，含完整 description + inputSchema。
 - `/api/tools` 与 MCP `tools/list` **字节级一致**（`tool-spec.ts` 用 SDK 同款 schema 转换保证的）。
-- 调用后 8080 出现一条 `source: mcp` 的调用日志，8081 若有展示逻辑会同步更新。
+- 调用后 18080 出现一条 `source: mcp` 的调用日志。

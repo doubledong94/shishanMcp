@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>shishan MCP · 代码图谱 3D</title>
+    <style>
+      * { box-sizing: border-box; margin: 0; }
+      body { font-family: system-ui, sans-serif; background: #0d1117; color: #c9d1d9; }
+      #app { position: fixed; inset: 0; }
+      canvas { display: block; }
+      .panel {
+        position: fixed; top: 12px; left: 12px; z-index: 10;
+        background: rgba(13,17,23,0.85); border: 1px solid #30363d;
+        border-radius: 8px; padding: 12px; width: 300px; font-size: 13px;
+      }
+      .panel h1 { font-size: 15px; margin-bottom: 8px; color: #e6edf3; }
+      .panel label { display: block; margin: 6px 0 3px; color: #8b949e; }
+      .panel input, .panel select, .panel textarea {
+        width: 100%; background: #161b22; color: #c9d1d9;
+        border: 1px solid #30363d; border-radius: 6px; padding: 6px;
+        font-size: 13px;
+      }
+      .panel button {
+        margin-top: 8px; width: 100%; padding: 8px;
+        background: #238636; color: #fff; border: none; border-radius: 6px;
+        cursor: pointer; font-size: 13px;
+      }
+      .panel button:hover { background: #2ea043; }
+      .stats { margin-top: 8px; color: #58a6ff; font-size: 12px; }
+      .error { margin-top: 8px; color: #f85149; font-size: 12px; }
+      .hint { margin-top: 8px; color: #8b949e; font-size: 11px; line-height: 1.5; }
+    </style>
+  </head>
+  <body>
+    <div id="app"></div>
+    <div class="panel">
+      <h1>代码图谱 3D</h1>
+      <label for="project">项目</label>
+      <select id="project"></select>
+      <label for="view">已保存视图</label>
+      <select id="view"><option value="">— 读取 query_graph 的 latest 快照 —</option></select>
+      <button id="view-btn">加载并渲染</button>
+      <div class="stats" id="stats"></div>
+      <div class="error" id="error"></div>
+      <div class="hint">
+        拖拽旋转 / 滚轮缩放 / 右键平移。节点按 kind 分类配色，
+        边为项目符号引用（绿色）与 AST child（灰色）。由 query_graph
+        （或 REST /api/run/query_graph）生成的快照驱动。
+      </div>
+    </div>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>

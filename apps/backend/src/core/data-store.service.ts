@@ -5,11 +5,11 @@ import * as path from "node:path";
 /**
  * Persistent store for project-generated data.
  *
- * The container gets a dedicated writable mount at DATA_ROOT (default /data),
- * backed by a host directory (HOST_DATA_ROOT). Code mounts are read-only; this
- * is the one place the app may write to, so anything saved here survives
- * container rebuilds. AI can read the files back through read_file using the
- * host absolute path (HOST_DATA_ROOT/...), same mapping as code projects.
+ * The container gets a dedicated writable mount at DATA_ROOT (default /data).
+ * With same-path mounts (container path == host path) DATA_ROOT is that host
+ * absolute path directly, so no separate host-root mapping is needed. Code
+ * mounts are read-only; this is the one place the app may write to, so
+ * anything saved here survives container rebuilds.
  *
  * Writes are best-effort: if DATA_ROOT is not writable (e.g. local `npm run
  * dev` without the mount), the app simply keeps working without persistence.
@@ -17,23 +17,15 @@ import * as path from "node:path";
 @Injectable()
 export class DataStoreService {
   private readonly root: string;
-  private readonly hostRoot: string | null;
   private readonly writable: boolean;
 
   constructor() {
     this.root = path.resolve(process.env.DATA_ROOT || "/data");
-    this.hostRoot = process.env.HOST_DATA_ROOT
-      ? path.resolve(process.env.HOST_DATA_ROOT)
-      : null;
     this.writable = this.probeWritable();
   }
 
   getRoot(): string {
     return this.root;
-  }
-
-  getHostRoot(): string | null {
-    return this.hostRoot;
   }
 
   isWritable(): boolean {

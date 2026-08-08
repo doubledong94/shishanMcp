@@ -533,3 +533,432 @@ button.ghost.run:disabled {
     padding: 20px 12px 48px;
   }
 }
+
+/* ---------- SCIP 索引查看器 ---------- */
+.scip-viewer {
+  margin-bottom: 20px;
+}
+
+.scip-viewer .calls-head {
+  align-items: center;
+}
+
+.scip-project {
+  background: #1e293b;
+  color: #e2e8f0;
+  border: 1px solid #334155;
+  border-radius: 6px;
+  padding: 4px 8px;
+  font-size: 13px;
+}
+
+.scip-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  font-size: 12px;
+  color: #94a3b8;
+  margin-bottom: 12px;
+}
+
+.scip-meta code {
+  color: #7dd3fc;
+}
+
+.scip-error {
+  color: #fca5a5;
+  font-size: 13px;
+  margin: 8px 0;
+}
+
+.scip-doc-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 420px;
+  overflow: auto;
+  border: 1px solid #1e293b;
+  border-radius: 8px;
+}
+
+.scip-doc-list li {
+  border-bottom: 1px solid #1e293b;
+}
+
+.scip-doc-list li:last-child {
+  border-bottom: none;
+}
+
+.scip-doc-toggle {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: none;
+  border: none;
+  color: inherit;
+  font-size: 13px;
+  text-align: left;
+  padding: 8px 10px;
+  cursor: pointer;
+}
+
+.scip-doc-toggle:hover {
+  background: #1e293b;
+}
+
+.scip-doc-toggle.has-no-coord {
+  background: rgba(202, 138, 4, 0.12);
+  border-left: 3px solid #b45309;
+}
+
+.scip-doc-toggle.has-no-coord:hover {
+  background: rgba(202, 138, 4, 0.2);
+}
+
+.scip-no-coord-tag {
+  flex: none;
+  font-size: 11px;
+  color: #fbbf24;
+  background: #78350f55;
+  border: 1px solid #b4530955;
+  border-radius: 4px;
+  padding: 1px 6px;
+}
+
+.caret {
+  width: 14px;
+  color: #64748b;
+  flex: none;
+}
+
+.scip-doc-path {
+  color: #e2e8f0;
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.scip-doc-lang {
+  flex: none;
+  font-size: 11px;
+  color: #38bdf8;
+  background: #0c4a6e22;
+  border: 1px solid #0c4a6e55;
+  border-radius: 4px;
+  padding: 1px 6px;
+}
+
+.scip-doc-body {
+  padding: 0 10px 10px 32px;
+}
+
+.scip-doc-view {
+  margin-top: 6px;
+}
+
+.scip-doc-view.has-no-coord {
+  background: rgba(202, 138, 4, 0.06);
+  border: 1px solid rgba(180, 83, 9, 0.35);
+  border-radius: 6px;
+  padding: 8px 10px;
+}
+
+.scip-no-coord-banner {
+  margin: 0 0 8px;
+  font-size: 12px;
+  color: #fbbf24;
+  background: rgba(120, 53, 15, 0.25);
+  border: 1px solid rgba(180, 83, 9, 0.4);
+  border-radius: 4px;
+  padding: 4px 8px;
+}
+
+.scip-doc-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  margin-bottom: 8px;
+}
+
+.scip-doc-meta code {
+  color: #7dd3fc;
+  font-size: 12px;
+}
+
+.scip-inner {
+  margin: 6px 0;
+  font-size: 12px;
+}
+
+.scip-inner > summary {
+  cursor: pointer;
+  color: #94a3b8;
+  user-select: none;
+}
+
+.scip-inner > summary:hover {
+  color: #e2e8f0;
+}
+
+.scip-doc-text {
+  max-height: 300px;
+  overflow: auto;
+  background: #0b1120;
+  border: 1px solid #1e293b;
+  border-radius: 6px;
+  padding: 10px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: #cbd5e1;
+  white-space: pre;
+}
+
+.scip-symbols,
+.scip-occs,
+.scip-rels,
+.scip-diags {
+  list-style: none;
+  margin: 6px 0 0;
+  padding: 0;
+  border-left: 2px solid #1e293b;
+  padding-left: 10px;
+}
+
+.scip-symbol,
+.scip-occ,
+.scip-rel {
+  margin-bottom: 6px;
+}
+
+.scip-occ {
+  background: #111827;
+  border: 1px solid #1e293b;
+  border-radius: 8px;
+  padding: 8px 10px;
+}
+
+.scip-occ-tag-label {
+  flex: none;
+  font-size: 9px;
+  letter-spacing: 0.03em;
+  color: #94a3b8;
+  background: #334155;
+  border-radius: 4px;
+  padding: 1px 6px;
+  text-transform: uppercase;
+}
+
+.scip-symbol {
+  background: #111827;
+  border: 1px solid #1e293b;
+  border-radius: 8px;
+  padding: 8px 10px;
+}
+
+.scip-symbol-card-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.scip-symbol-tag {
+  flex: none;
+  font-size: 9px;
+  letter-spacing: 0.03em;
+  color: #94a3b8;
+  background: #334155;
+  border-radius: 4px;
+  padding: 1px 6px;
+  text-transform: uppercase;
+}
+
+.scip-symbol-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.scip-symbol-name {
+  color: #93c5fd;
+  font-size: 12px;
+}
+
+.scip-symbol-kind {
+  flex: none;
+  font-size: 10px;
+  color: #a5b4fc;
+  background: #312e8122;
+  border: 1px solid #312e8155;
+  border-radius: 4px;
+  padding: 0 5px;
+}
+
+.scip-symbol-sig {
+  color: #94a3b8;
+  font-size: 11px;
+  font-style: italic;
+}
+
+.scip-symbol-full {
+  display: block;
+  color: #64748b;
+  font-size: 11px;
+  word-break: break-all;
+  padding: 4px 0;
+}
+
+.scip-field-label {
+  flex: none;
+  font-size: 10px;
+  color: #475569;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+
+.scip-symbol-full-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 2px 0;
+}
+
+.scip-symbol-doc {
+  margin: 4px 0;
+  color: #cbd5e1;
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
+
+.scip-occ-line {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.scip-occ-loc {
+  flex: none;
+  color: #64748b;
+  font-size: 11px;
+  font-family: ui-monospace, Menlo, monospace;
+}
+
+.scip-occ-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 2px;
+}
+
+.scip-occ-tag {
+  font-size: 10px;
+  color: #64748b;
+  background: #1e293b;
+  border-radius: 4px;
+  padding: 0 5px;
+}
+
+.scip-rel {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.scip-rel-flags {
+  flex: none;
+  font-size: 10px;
+  color: #86efac;
+  background: #14532d22;
+  border: 1px solid #14532d55;
+  border-radius: 4px;
+  padding: 0 5px;
+}
+
+.scip-diag {
+  font-size: 12px;
+  color: #fca5a5;
+}
+
+.scip-diag-msg {
+  display: block;
+}
+
+.scip-meta-args {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ---------- 语法树查看器 ---------- */
+.ast-tree-view {
+  margin-top: 6px;
+}
+
+.ast-errors {
+  color: #fca5a5;
+  background: #7f1d1d22;
+  border: 1px solid #7f1d1d55;
+  border-radius: 4px;
+  font-size: 10px;
+  padding: 0 5px;
+}
+
+.ast-node {
+  line-height: 1.6;
+}
+
+.ast-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: none;
+  border: none;
+  color: inherit;
+  font-size: 12px;
+  text-align: left;
+  padding: 1px 4px;
+  cursor: pointer;
+  border-radius: 4px;
+  width: 100%;
+}
+
+.ast-toggle:hover {
+  background: #1e293b;
+}
+
+.ast-leaf {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  padding: 1px 4px;
+}
+
+.ast-kind {
+  color: #c4b5fd;
+  font-size: 12px;
+}
+
+.ast-snippet {
+  color: #86efac;
+  background: #14532d22;
+  border-radius: 4px;
+  padding: 0 5px;
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 320px;
+}
+
+.ast-tree-view .muted {
+  font-size: 11px;
+}
+
+

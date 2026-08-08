@@ -161,10 +161,12 @@ curl -o gradle-9.6.1-bin.zip \
   "https://mirrors.cloud.tencent.com/gradle/gradle-9.6.1-bin.zip"
 ```
 
-**方案二（更省事）：直接用 scip-java 镜像自带的 Gradle 9.4.1**
+**方案二（更省事）：直接用 scip 网关镜像自带的 Gradle**
 
 scip-java 的 `index` 命令优先用项目的 `gradlew`，若把 `gradlew`/`gradlew.bat` 移除，
-它会回退到 `PATH` 里的 `gradle`（容器内是 `/opt/gradle/bin/gradle`，即 9.4.1），
+它会回退到 `PATH` 里的 `gradle`（容器内是 `/usr/local/bin/gradle`，link 到
+`/opt/gradle/gradle-<version>`，版本跟随 `docker/scip/Dockerfile` 的 `GRADLE_VERSION`，
+当前默认 `9.6.1`，与 OkHttp 等主流项目的 wrapper 一致，可 `--build-arg` 覆盖），
 从而跳过 wrapper 发行版下载。缺点是要在项目副本上操作，且 Gradle 版本与 wrapper 锁定的不同。
 
 ---

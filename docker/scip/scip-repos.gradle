@@ -1,0 +1,38 @@
+// scip-mirror: 将 Gradle 访问被墙的官方仓库重定向到国内镜像（无需 VPN）。
+// 放在 ~/.gradle/init.d/ 下对 scip-java 发起的每个构建自动生效。
+// 四组映射：
+//   dl.google.com         -> 阿里云 google
+//   repo.maven.apache.org/repo1.maven.org -> 腾讯 maven-public（阿里云 central 对部分组返回 502，腾讯完整）
+//   plugins.gradle.org    -> 阿里云 gradle-plugin
+
+def trim = { String u -> u.replaceAll(/\/+$/, '') }
+
+def mirrors = [
+  "https://dl.google.com/dl/android/maven2": "https://maven.aliyun.com/repository/google",
+  "https://repo.maven.apache.org/maven2":    "https://mirrors.cloud.tencent.com/nexus/repository/maven-public",
+  "https://repo1.maven.org/maven2":          "https://mirrors.cloud.tencent.com/nexus/repository/maven-public",
+  "https://plugins.gradle.org/m2":           "https://maven.aliyun.com/repository/gradle-plugin"
+]
+
+def redirect = { repo ->
+  if (repo instanceof MavenArtifactRepository) {
+    def u = trim(repo.url.toString())
+    mirrors.each { from, to ->
+      if (u.startsWith(from)) {
+        repo.setUrl(to)
+        println "scip-mirror: ${u} -> ${to}"
+      }
+    }
+  }
+}
+
+settingsEvaluated { settings ->
+  settings.pluginManagement.repositories.all(redirect)
+  settings.dependencyResolutionManagement.repositories.all(redirect)
+}
+
+allprojects {
+  buildscript.repositories.all(redirect)
+  repositories.all(redirect)
+}
+

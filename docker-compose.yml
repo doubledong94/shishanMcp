@@ -1,4 +1,5 @@
 services:
+  # ---- 主 MCP 容器：NestJS + nginx + tree-sitter + Three.js 图页 ----
   shishan:
     build:
       context: .
@@ -10,29 +11,75 @@ services:
         all_proxy: ${ALL_PROXY:-}
     image: shishan-mcp:local
     container_name: shishan-mcp
-    # 多项目挂载：宿主机项目目录 -> /workspace/<目录名>，两边目录名必须一致。
-    # PROJECT_A/B 是宿主机项目绝对路径，HOST_CODE_ROOT 是它们的共同父目录。
-    # DATA_DIR 是宿主机数据目录（存放项目产生的数据/日志），挂载为 /data（可写）。
-    # 代码挂载是只读的（:ro），数据挂载可写。
-    # 例（两个项目都在 /Users/you/projects 下）：
-    #   PROJECT_A=/Users/you/projects/proj-a \
-    #   PROJECT_B=/Users/you/projects/proj-b \
-    #   HOST_CODE_ROOT=/Users/you/projects \
-    #   DATA_DIR=/Users/you/projects/shishan-data \
-    #   docker compose up --build
+    # 同路径挂载：宿主机项目绝对路径 -> 容器内同一路径（容器内路径 = 宿主机路径），
+    # 所以 AI 传宿主机绝对路径可直接读取，无需 HOST_CODE_ROOT 映射。
+    # CODE_PROJECTS = 冒号分隔的项目绝对路径列表（目录名 = 项目名）。
+    # 代码挂载只读（:ro），数据目录可写。
     volumes:
-      - ${PROJECT_A:?设置 PROJECT_A=<宿主机项目绝对路径>}:/workspace/proj-a:ro
-      - ${PROJECT_B:?设置 PROJECT_B=<宿主机项目绝对路径>}:/workspace/proj-b:ro
-      - ${DATA_DIR:?设置 DATA_DIR=<宿主机数据目录>}:/data
+      - ${PROJECT_A:?设置 PROJECT_A=<宿主机项目绝对路径>}:${PROJECT_A:?设置 PROJECT_A}:ro
+      - ${PROJECT_B:?设置 PROJECT_B=<宿主机项目绝对路径>}:${PROJECT_B:?设置 PROJECT_B}:ro
+      - ${DATA_DIR:?设置 DATA_DIR=<宿主机数据目录>}:${DATA_DIR:?设置 DATA_DIR}
     environment:
       - NODE_ENV=production
       - MCP_SERVER_NAME=shishan-mcp-server
-      - CODE_ROOT=/workspace
-      - HOST_CODE_ROOT=${HOST_CODE_ROOT:?设置 HOST_CODE_ROOT=<项目共同父目录>}
-      - DATA_ROOT=/data
-      - HOST_DATA_ROOT=${DATA_DIR:?设置 DATA_DIR=<宿主机数据目录>}
+      # CODE_PROJECTS = 冒号分隔的项目绝对路径列表（目录名 = 项目名）。
+      # 优先用脚本算好的 PROJECT_LIST（去重），未设时回退 PROJECT_A:PROJECT_B。
+      - CODE_PROJECTS=${PROJECT_LIST:-${PROJECT_A}:${PROJECT_B}}
+      - DATA_ROOT=${DATA_DIR:?设置 DATA_DIR}
+      # 代码图谱：scip 网关 + Neo4j 地址（走 compose 内部网络）
+      - SCIP_URL=http://scip:8000
+      - NEO4J_URL=bolt://neo4j:7687
+      - NEO4J_USER=neo4j
+      - NEO4J_PASSWORD=${NEO4J_PASSWORD:?设置 NEO4J_PASSWORD=<neo4j 密码>}
+      # 图谱 3D 页对外地址（query_graph 返回的 viewUrl 前缀）
+      - GRAPH_VIEW_URL=http://localhost:18081
     ports:
-      - "8080:80"    # MCP 调试控制台（工具调用日志）
-      - "8081:81"    # MCP 功能页（代码查看）
-      - "3000:3000"  # MCP Server（LLM 客户端直连，Streamable HTTP @ /）
+      - "18080:80"   # MCP 调试控制台（工具调用日志）
+      - "18081:82"   # 代码图谱 3D 页（Three.js）
+      - "13000:3000" # MCP Server（LLM 客户端直连，Streamable HTTP @ /）
+    depends_on:
+      - scip
+      - neo4j
+    restart: unless-stopped
+
+  # ---- scip 索引网关：生成 index.scip + 转 JSON ----
+  scip:
+    build:
+      context: ./docker/scip
+      dockerfile: Dockerfile
+      args:
+        http_proxy: ${HTTP_PROXY:-}
+        https_proxy: ${HTTPS_PROXY:-}
+        all_proxy: ${ALL_PROXY:-}
+    image: shishan-scip:local
+    container_name: shishan-scip
+    volumes:
+      # 与主容器同路径挂载同一批项目（只读），产出写到共享 DATA_DIR
+      - ${PROJECT_A:?设置 PROJECT_A}:${PROJECT_A:?设置 PROJECT_A}:ro
+      - ${PROJECT_B:?设置 PROJECT_B}:${PROJECT_B:?设置 PROJECT_B}:ro
+      - ${DATA_DIR:?设置 DATA_DIR}:${DATA_DIR:?设置 DATA_DIR}
+    environment:
+      - SCIP_PROJECTS=${PROJECT_LIST:-${PROJECT_A}:${PROJECT_B}}
+      - SCIP_DATA_ROOT=${DATA_DIR:?设置 DATA_DIR}/scip
+      - PORT=8000
+    expose:
+      - "8000"
+    restart: unless-stopped
+
+  # ---- Neo4j 图数据库：数据 bind mount 到宿主机，容器回收不丢 ----
+  neo4j:
+    image: neo4j:5-community
+    container_name: shishan-neo4j
+    environment:
+      - NEO4J_AUTH=neo4j/${NEO4J_PASSWORD:?设置 NEO4J_PASSWORD}
+      - NEO4J_server_memory_heap_max__size=1G
+      # Neo4j 5 默认要求密码 >=8 位，允许自定义短密码（如本地测试用 6 位）
+      - NEO4J_dbms_security_auth__minimum__password__length=4
+    volumes:
+      # bind mount：图数据库持久化在宿主机 DATA_DIR/neo4j，随容器重建/回收不丢
+      - ${DATA_DIR:?设置 DATA_DIR}/neo4j/data:/data
+      - ${DATA_DIR:?设置 DATA_DIR}/neo4j/logs:/logs
+    ports:
+      - "7474:7474"  # Neo4j Browser（调试用，可去掉）
+      - "7687:7687"  # Bolt（调试用，可去掉）
     restart: unless-stopped
