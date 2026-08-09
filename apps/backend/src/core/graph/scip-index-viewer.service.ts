@@ -59,6 +59,15 @@ export class ScipIndexViewerService {
     return idx;
   }
 
+  /** 供其他服务复用缓存索引（AST 查看器等）。不存在返回 undefined。 */
+  async loadIndex(project: string): Promise<ScipIndexJson | undefined> {
+    try {
+      return await this.load(project);
+    } catch {
+      return undefined;
+    }
+  }
+
   /** 项目概览：元信息 + 文档列表统计。 */
   async summary(project: string): Promise<ScipIndexSummary> {
     const idx = await this.load(project);

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 function JsonBlock({ label, value }) {
   return (
@@ -411,6 +411,8 @@ function ScipDocView({ doc }) {
 
 function shortSymbol(s) {
   if (!s) return "";
+  // SCIP local 符号形如 "local 3"：匿名无名字，显示占位说明而非裸数字
+  if (s.startsWith("local ")) return `<local #${s.slice(6)}>`;
   const parts = s.split(" ");
   return parts[parts.length - 1] || s;
 }
@@ -590,7 +592,7 @@ function ScipIndexViewer({ projects }) {
   );
 }
 
-function AstNodeRow({ node, depth, source }) {
+function AstNodeRow({ node, depth, source, matchIndex, activeOcc, onMatch }) {
   const [open, setOpen] = useState(depth < 2);
   const hasChildren = node.children?.length > 0;
   const range = node.name ? `${node.kind} «${node.name}»` : node.kind;
@@ -598,6 +600,19 @@ function AstNodeRow({ node, depth, source }) {
     source && node.end > node.start
       ? source.slice(node.start, node.end)
       : null;
+  const hit = matchesForNode(node, matchIndex);
+  const isActive = activeOcc !== null && hit && hit.includes(activeOcc);
+  const matched = hit ? `${hit.length} occ` : null;
+
+  const handleMatch = (e) => {
+    e.stopPropagation();
+    if (!hit) return;
+    // 多个匹配时循环切换
+    const idx = hit.indexOf(activeOcc);
+    const next = idx >= 0 ? hit[(idx + 1) % hit.length] : hit[0];
+    onMatch(next);
+  };
+
   return (
     <div className="ast-node" style={{ paddingLeft: `${depth * 8}px` }}>
       {hasChildren ? (
@@ -612,25 +627,108 @@ function AstNodeRow({ node, depth, source }) {
           </span>
         </button>
       ) : (
-        <div className="ast-leaf">
+        <div className={`ast-leaf ${isActive ? "ast-leaf-active" : ""}`}>
           <span className="caret muted">·</span>
           <code className="ast-kind">{range}</code>
           {snippet !== null && snippet.length <= 40 && (
             <code className="ast-snippet">{snippet}</code>
           )}
           <span className="muted">[{node.start}–{node.end}]</span>
+          {hit && (
+            <button
+              className="ast-match-btn"
+              title={hit.map((o) => o.symbol).join("\n")}
+              onClick={handleMatch}
+            >
+              {matched}
+            </button>
+          )}
+          {isActive && activeOcc && (
+            <span className="ast-match-symbol" title={activeOcc.symbol}>
+              {shortSymbol(activeOcc.symbol)}
+            </span>
+          )}
+        </div>
+      )}
+      {isActive && activeOcc && source && (
+        <div
+          className="ast-source-preview"
+          style={{ paddingLeft: `${(depth + 1) * 8}px` }}
+        >
+          <code className="ast-source-window">
+            {(() => {
+              const w = codeWindow(source, activeOcc.byteRange[0], activeOcc.byteRange[1]);
+              return (
+                <>
+                  <span className="ast-src-pre">{w.head}</span>
+                  <span
+                    className="ast-src-hit"
+                    title={`byte[${activeOcc.byteRange[0]},${activeOcc.byteRange[1]})`}
+                  >
+                    {w.seg}
+                  </span>
+                  <span className="ast-src-post">{w.tail}</span>
+                </>
+              );
+            })()}
+          </code>
         </div>
       )}
       {open &&
         hasChildren &&
         node.children.map((c, i) => (
-          <AstNodeRow key={i} node={c} depth={depth + 1} source={source} />
+          <AstNodeRow
+            key={i}
+            node={c}
+            depth={depth + 1}
+            source={source}
+            matchIndex={matchIndex}
+            activeOcc={activeOcc}
+            onMatch={onMatch}
+          />
         ))}
     </div>
   );
 }
 
-function AstTreeView({ ast, source }) {
+/** 命中 occurrence 索引：byteRange -> occurrence[]（一个区间可能对应多个符号）。 */
+function matchesForNode(node, matchIndex) {
+  if (!matchIndex || matchIndex.size === 0) return null;
+  return matchIndex.get(`${node.start}:${node.end}`) || null;
+}
+
+/**
+ * 取 byteRange 附近的源码窗口（字节偏移），返回左/命中/右三段。
+ * 用 TextEncoder 把源文本字节化，按字节偏移切片，再 UTF-8 解码片段，
+ * 避免字节坐标直接当字符索引导致中文错位。
+ */
+function codeWindow(source, bStart, bEnd, pad = 90) {
+  const enc = new TextEncoder();
+  const dec = new TextDecoder();
+  const bytes = enc.encode(source);
+  const hi = Math.min(bEnd, bytes.length);
+  const lo = Math.max(0, Math.min(bStart, hi));
+  return {
+    head: dec.decode(bytes.slice(Math.max(0, lo - pad), lo)),
+    seg: dec.decode(bytes.slice(lo, hi)),
+    tail: dec.decode(bytes.slice(hi, Math.min(bytes.length, hi + pad))),
+  };
+}
+
+function AstTreeView({ ast, source, occurrences }) {
+  const [activeOcc, setActiveOcc] = useState(null);
+  const matchIndex = useMemo(() => {
+    const m = new Map();
+    if (occurrences) {
+      for (const occ of occurrences) {
+        const key = `${occ.byteRange[0]}:${occ.byteRange[1]}`;
+        const list = m.get(key);
+        if (list) list.push(occ);
+        else m.set(key, [occ]);
+      }
+    }
+    return m;
+  }, [occurrences]);
   return (
     <div className="ast-tree-view">
       <div className="scip-doc-meta">
@@ -638,9 +736,22 @@ function AstTreeView({ ast, source }) {
         <span className="muted">{ast.path}</span>
         <span className="ast-errors">errors: {ast.errorCount}</span>
         {source && <span className="muted">{source.length} 字符</span>}
+        {occurrences && (
+          <span className="muted">
+            {occurrences.length} occurrences 可匹配
+          </span>
+        )}
       </div>
       {ast.nodes.map((n, i) => (
-        <AstNodeRow key={i} node={n} depth={0} source={source} />
+        <AstNodeRow
+          key={i}
+          node={n}
+          depth={0}
+          source={source}
+          matchIndex={matchIndex}
+          activeOcc={activeOcc}
+          onMatch={setActiveOcc}
+        />
       ))}
     </div>
   );
@@ -731,6 +842,9 @@ function AstViewer({ projects }) {
             语法树文件: <b>{summary.files.length}</b>
           </span>
           <span>
+            有 index: <b>{summary.indexedFiles}</b>
+          </span>
+          <span>
             解析错误: <b>{summary.totalErrors}</b>
           </span>
           <span className="scip-meta-args">
@@ -751,12 +865,17 @@ function AstViewer({ projects }) {
             return (
               <li key={f.astPath}>
                 <button
-                  className={`scip-doc-toggle ${open ? "open" : ""}`}
+                  className={`scip-doc-toggle ${open ? "open" : ""} ${f.hasIndex ? "" : "has-no-index"}`}
                   onClick={() => toggleFile(f.astPath)}
                 >
                   <span className="caret">{open ? "▾" : "▸"}</span>
                   <code className="scip-doc-path">{f.astPath}</code>
                   <span className="scip-doc-lang">{f.language}</span>
+                  {f.hasIndex ? (
+                    <span className="scip-no-coord-tag">有 index</span>
+                  ) : (
+                    <span className="no-index-tag">无 index</span>
+                  )}
                   {f.errorCount > 0 && <span className="ast-errors">{f.errorCount} err</span>}
                 </button>
                 {open && (
@@ -766,7 +885,11 @@ function AstViewer({ projects }) {
                     ) : cached?.error ? (
                       <span className="scip-error">{cached.error}</span>
                     ) : (
-                      <AstTreeView ast={cached.ast} source={cached.source} />
+                      <AstTreeView
+                        ast={cached.ast}
+                        source={cached.source}
+                        occurrences={cached.occurrences}
+                      />
                     )}
                   </div>
                 )}

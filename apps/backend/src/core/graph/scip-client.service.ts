@@ -20,8 +20,12 @@ export interface ScipDocument {
   }>;
   occurrences: Array<{
     symbol: string;
-    range: [number, number];
+    range?: [number, number, number] | [number, number, number, number];
     symbol_roles?: number;
+    /** SCIP 协议 typed_range（oneof），网关 JSON 序列化后的形态 */
+    TypedRange?:
+      | { SingleLineRange?: { line: number; start_character: number; end_character: number } }
+      | { MultiLineRange?: Record<string, number> };
   }>;
 }
 

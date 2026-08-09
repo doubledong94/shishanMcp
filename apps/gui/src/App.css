@@ -961,4 +961,88 @@ button.ghost.run:disabled {
   font-size: 11px;
 }
 
+/* AST 文件是否有 SCIP index 的标注 */
+.scip-doc-toggle.has-no-index {
+  background: rgba(100, 116, 139, 0.12);
+  border-left: 3px solid #64748b;
+}
+
+.scip-doc-toggle.has-no-index:hover {
+  background: rgba(100, 116, 139, 0.2);
+}
+
+.no-index-tag {
+  flex: none;
+  font-size: 11px;
+  color: #cbd5e1;
+  background: #33415555;
+  border: 1px solid #475569;
+  border-radius: 4px;
+  padding: 1px 6px;
+}
+
+/* AST 叶子节点匹配 occurrence */
+.ast-leaf-active {
+  background: rgba(59, 130, 246, 0.18);
+  border-radius: 4px;
+}
+
+.ast-match-btn {
+  flex: none;
+  font-size: 10px;
+  color: #93c5fd;
+  background: #1e3a8a44;
+  border: 1px solid #3b82f655;
+  border-radius: 4px;
+  padding: 0 5px;
+  cursor: pointer;
+}
+
+.ast-match-btn:hover {
+  background: #1e3a8a88;
+}
+
+.ast-match-symbol {
+  flex: none;
+  font-size: 10px;
+  color: #bfdbfe;
+  background: #1e3a8a33;
+  border-radius: 4px;
+  padding: 0 5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 260px;
+}
+
+.ast-source-preview {
+  padding: 3px 0 3px 16px;
+}
+
+.ast-source-window {
+  display: block;
+  font-family: ui-monospace, SFMono-Regular, SF Mono, Menlo, Consolas, monospace;
+  font-size: 11px;
+  line-height: 1.5;
+  color: #d1d5db;
+  background: #0b122033;
+  border-left: 2px solid #3b82f666;
+  padding: 4px 8px;
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-width: 88ch;
+}
+
+.ast-src-pre,
+.ast-src-post {
+  color: #6b7280;
+}
+
+.ast-src-hit {
+  color: #fde68a;
+  background: #854d0e55;
+  border-radius: 2px;
+  padding: 0 1px;
+}
+
 
