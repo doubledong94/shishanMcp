@@ -80,7 +80,8 @@ echo "  MCP server : http://localhost:13000/"
 echo "  调试控制台 : http://localhost:18080"
 echo "  代码图谱 3D: http://localhost:18081"
 echo "  Neo4j      : bolt://localhost:7687 (neo4j/$NEO4J_PASSWORD)"
-echo "  数据目录   : $DATA_DIR（图数据库在 $DATA_DIR/neo4j，随容器回收不丢）"
+# 用 ${VAR} 花括号 + 断行：macOS bash 3.2 在 set -u 下，变量紧跟全角字符（如（，）会误报 unbound variable
+echo "  数据目录   : ${DATA_DIR}（图数据库在 ${DATA_DIR}/neo4j，随容器回收不丢）"
 echo "  挂载项目（容器内路径 = 宿主机路径）:"
 for a in "${ABSP[@]}"; do echo "    $a"; done
 docker compose -p "$PRE" -f "$DIR/docker-compose.yml" ps
