@@ -9,10 +9,7 @@
 ## 快速上手（30 秒预览）
 
 ```bash
-# 只读代码版：挂载一个项目 + 启动 MCP
-./scripts/deploy.sh /path/to/proj-a
-
-# 代码图谱版：MCP + scip 网关 + Neo4j 图数据库
+# 代码图谱版：MCP + scip 网关 + Neo4j 图数据库（--password 是 Neo4j 密码，必填）
 ./scripts/deploy-graph.sh --password your-pass /path/to/proj-a
 ```
 
@@ -44,23 +41,26 @@
 
 ### 2A. 部署（有源码，自己构建）
 
-把要分析的项目目录作为参数传给部署脚本（相对/绝对路径都行，可传多个）：
+代码图谱版一键脚本 `deploy-graph.sh` 会用 docker compose 构建镜像并启动 **3 个容器**（MCP + scip 索引网关 + Neo4j 图数据库）。把要分析的项目目录作为参数传给它（相对/绝对路径都行，可传多个）：
 
 ```bash
-./scripts/deploy.sh /path/to/proj-a /path/to/proj-b
+./scripts/deploy-graph.sh --password my-secret-pass /path/to/proj-a /path/to/proj-b
 ```
 
-脚本会：停掉并删除旧容器 → 构建镜像 → 把每个项目**同路径挂载**（宿主机绝对路径 = 容器内路径，只读）→ 把数据目录同样同路径挂载（可写，存放项目产生的数据/日志）→ 启动容器（18080/13000）→ 自动清理旧的悬空镜像。
+`--password` 是 Neo4j 密码，必填。脚本会：停掉并删除旧容器 → 构建镜像 → 把每个项目**同路径挂载**（宿主机绝对路径 = 容器内路径，只读）→ 把数据目录同样同路径挂载（可写，存放项目产生的数据/日志）→ 启动 3 个服务：`shishan-mcp`（MCP + 2 个网页）、`shishan-scip`（scip 索引网关，仅内网 8000）、`shishan-neo4j`（图数据库，端口 7474/7687）→ 自动清理旧的悬空镜像。启动后访问：
+
+- MCP / 控制台 / 图谱页：13000 / 18080 / **18081**
+- Neo4j Browser：`http://localhost:7474`（neo4j / 你设的密码）
 
 **同路径挂载**意味着容器内路径和宿主机完全一致，scip / tree-sitter 直接按宿主机绝对路径读取项目文件，无需任何路径映射。
 
-数据目录默认是 `~/.shishan-data`（与用户名/项目路径无关，所有用户通用），也可以用 `--data` 指定：
+数据目录默认是 `~/.shishan-data`（与用户名/项目路径无关，所有用户通用），也可以用 `--data` 指定；图数据库数据持久化在 `$DATA_DIR/neo4j`，容器回收不丢。容器名前缀默认 `shishan`，用 `--name <前缀>` 修改：
 
 ```bash
-./scripts/deploy.sh --data /path/to/my-data /path/to/proj-a
+./scripts/deploy-graph.sh --data /path/to/my-data --password my-secret-pass /path/to/proj-a
 ```
 
-> 想用 docker compose 也行。compose 用环境变量（`:?` 强制必填）传参，二选一：
+> `deploy-graph.sh` 本质是 docker compose 的封装。想直接用 compose 也行，compose 用环境变量（`:?` 强制必填）传参：
 >
 > **用 `.env` 文件**（推荐，新建项目根目录 `.env`）：
 >
@@ -71,11 +71,11 @@
 >                                  #   单项目时务必这样写，否则会传成 "proj-a:proj-a" 重复；
 >                                  #   不设置时回退为 "PROJECT_A:PROJECT_B"。
 > DATA_DIR=$HOME/.shishan-data
-> NEO4J_PASSWORD=your-pass         # 代码图谱版必填
+> NEO4J_PASSWORD=your-pass         # 必填
 > # HTTP_PROXY=... HTTP 代理可选（国内构建用），见"国内网络"节
 > ```
 >
-> 然后 `docker compose up --build`（代码图谱版三容器全起；纯代码版忽略 NEO4J_PASSWORD）。
+> 然后 `docker compose up --build`（三容器全起，`NEO4J_PASSWORD` 必填）。
 >
 > **或直接在命令行导出**：
 >
@@ -87,21 +87,6 @@
 > ```
 >
 > 不设变量会直接报错（`PROJECT_A:?设置 PROJECT_A=...`），这是正常的。
-
-#### 部署代码图谱（3 容器，可选）
-
-需要图数据库的话，用 `deploy-graph.sh` 一键启动 **3 个容器**（MCP + scip 索引网关 + Neo4j 图数据库），比普通部署多一个 `--password`（Neo4j 密码）：
-
-```bash
-./scripts/deploy-graph.sh --password my-secret-pass /path/to/proj-a /path/to/proj-b
-```
-
-脚本会启动 3 个服务：`shishan-mcp`（MCP + 2 个网页）、`shishan-scip`（scip 索引网关，仅内网 8000）、`shishan-neo4j`（图数据库，端口 7474/7687）。启动后访问：
-
-- MCP / 控制台 / 图谱页：13000 / 18080 / **18081**
-- Neo4j Browser：`http://localhost:7474`（neo4j / 你设的密码）
-
-其他参数：`--data <目录>` 指定数据目录、`--name <前缀>` 指定容器名前缀。图数据库数据持久化在 `$DATA_DIR/neo4j`，容器回收不丢。
 
 #### 国内网络：访问 Docker Hub 需要代理
 
@@ -117,9 +102,9 @@ export HTTPS_PROXY=http://127.0.0.1:10808
 export ALL_PROXY=socks5://127.0.0.1:10808
 ```
 
-- **构建（2A / compose / deploy.sh）**：构建阶段内的 `apk` / `npm` / `pip` 联网走构建代理，`deploy.sh` 已默认注入 `host.docker.internal:10808`，基础镜像拉取则走你 shell 里导出的代理。
+- **构建（deploy-graph.sh / compose）**：构建阶段内的 `apk` / `npm` / `pip` 联网走构建代理，compose 会把 shell 里导出的 `HTTP_PROXY` / `HTTPS_PROXY` / `ALL_PROXY` 作为 build args 注入（没导出就不注入，见 docker-compose.yml），基础镜像拉取则走你 shell 里导出的代理。
 - **拉镜像（2B `docker pull`）**：需要上面导出的代理；Docker Desktop 用户也可以在 Settings → Resources → Proxies 里配置，效果更稳定。
-- 代理端口 / 地址不一样的话，改 `scripts/deploy.sh` 里的 `PROXY_ARGS` 和上面的导出命令即可。
+- 代理端口 / 地址不一样的话，改上面的导出命令即可。
 
 ### 2B. 部署（直接用发布好的镜像，无需源码）
 
@@ -180,7 +165,7 @@ claude mcp add --transport http shishan http://127.0.0.1:13000
 
 ## 代码图谱（可选）
 
-部署时带上 Neo4j 密码（见下"部署代码图谱"）后，AI 会额外看到 4 个图谱工具：
+部署时带上 Neo4j 密码（见上"2A. 部署"）后，AI 会额外看到 4 个图谱工具：
 
 - `generate_scip_index(project, language)`：调 scip 索引网关生成精确符号索引
 - `generate_syntax_tree(project, language?)`：用 tree-sitter（306 语言）生成语法树
@@ -223,16 +208,16 @@ open http://localhost:18081   # 代码图谱 3D 页（需先有视图，直接�
 - **添加 / 移除要读的项目**：改一下部署参数重新跑一遍即可，旧容器和悬空镜像会自动清理：
 
   ```bash
-  ./scripts/deploy.sh /path/to/proj-a /path/to/proj-b /path/to/proj-c
+  ./scripts/deploy-graph.sh --password my-secret-pass /path/to/proj-a /path/to/proj-b /path/to/proj-c
   ```
 
   **数据不会丢**：每次重跑都重新挂载同一个数据目录 `/data`（默认 `~/.shishan-data`，或 `--data` 指定），容器里产生的日志等数据一直留在宿主机。
 
 - **停掉服务**：`docker rm -f shishan-mcp`（图谱版另需 `docker rm -f shishan-scip shishan-neo4j`，或 `docker compose -p shishan down`）。
-- **构建需要代理吗？** `deploy.sh` 默认带上了本机代理参数（Docker Hub 不可达时用）。你的网络能直连 Docker Hub 的话，把 `scripts/deploy.sh` 里的 `PROXY_ARGS` 数组清空即可。
+- **构建需要代理吗？** 见上文「国内网络」节：shell 导出代理后，compose 会把它作为构建代理注入。网络能直连 Docker Hub 的话不设代理即可。
 
 ## 常见问题
 
-- **改了代码需要重新构建**：`deploy.sh` 每次都重新构建镜像，改动后重跑即可。
+- **改了代码需要重新构建**：`deploy-graph.sh` 每次都 `--build` 重新构建镜像，改动后重跑即可。
 - **图谱页（18081）打开是空白**：图谱页按 URL hash 加载快照，直接打开 `http://localhost:18081` 没有视图是正常的；要让 AI 先调 `query_graph` 拿到 `viewUrl`（形如 `http://localhost:18081/#/view/<proj>/<viewId>`）再打开。
 - **`import_to_graph` 报"未配置 NEO4J_PASSWORD"**：用 `deploy-graph.sh --password <密码>` 部署；密码通过 compose 注入，不能缺省。

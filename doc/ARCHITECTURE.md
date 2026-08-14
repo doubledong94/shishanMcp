@@ -28,7 +28,7 @@
 │      │HTTP(8000)│Bolt(7687)  │                             │
 │      ▼          ▼            ▼                              │
 │  ┌──────────────────┐  ┌───────────────────┐               │
-│  │ scip 网关容器     │  │ neo4j:5-community │ :7687/7474    │
+│  │ scip 网关容器     │  │ neo4j:2026-community │ :7687/7474 │
 │  │ scip CLI + 各语言 │  │  BIND MOUNT       │               │
 │  │ indexer(ts/py/go)│  │  $DATA/neo4j:/data │◄── 持久化关键 │
 │  │ 挂载同项目:ro     │  │  $DATA/neo4j/logs  │               │
@@ -41,7 +41,7 @@
 | --- | --- | --- | --- |
 | `mcp` | 现有 NestJS + nginx | 13000 / 18080 / 18081 | MCP 编排、tree-sitter 语法树、cypher 查询、Three.js 图谱页 |
 | `scip` | 自建网关（见 §3） | 8000（仅内网） | 生成 `index.scip`，转换 protobuf → JSON |
-| `neo4j` | `neo4j:5-community` | 7687 / 7474 | 图数据库，数据绑定挂载宿主机目录 |
+| `neo4j` | `neo4j:2026-community` | 7687 / 7474 | 图数据库，数据绑定挂载宿主机目录 |
 
 ## 3. scip 网关容器
 
@@ -117,7 +117,7 @@ RETURN p
 - neo4j 数据 → `${DATA_DIR}/neo4j:/data`（宿主机真实目录）
 - 即使 `docker compose down`、`docker rm`、重建镜像，数据都留在宿主机；`down -v` 只删 named volume，**不影响 bind mount**
 
-复用现有 `deploy.sh` 的 `${DATA_DIR}` 体系（默认 `~/.shishan-data`），数据目录也采用**同路径挂载**（容器内路径 = 宿主机路径），新增子目录：
+复用 `${DATA_DIR}` 体系（默认 `~/.shishan-data`，见 `scripts/deploy-graph.sh`），数据目录也采用**同路径挂载**（容器内路径 = 宿主机路径），新增子目录：
 
 ```
 ~/.shishan-data/
@@ -149,7 +149,7 @@ services:
     restart: unless-stopped
 
   neo4j:
-    image: neo4j:5-community
+    image: neo4j:2026-community
     environment:
       - NEO4J_AUTH=neo4j/${NEO4J_PASSWORD}
       - NEO4J_server_memory_heap_max__size=1G

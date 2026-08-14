@@ -68,12 +68,12 @@ services:
 
   # ---- Neo4j 图数据库：数据 bind mount 到宿主机，容器回收不丢 ----
   neo4j:
-    image: neo4j:5-community
+    image: neo4j:2026-community
     container_name: shishan-neo4j
     environment:
       - NEO4J_AUTH=neo4j/${NEO4J_PASSWORD:?设置 NEO4J_PASSWORD}
       - NEO4J_server_memory_heap_max__size=1G
-      # Neo4j 5 默认要求密码 >=8 位，允许自定义短密码（如本地测试用 6 位）
+      # Neo4j 默认要求密码 >=8 位，允许自定义短密码（如本地测试用 6 位）
       - NEO4J_dbms_security_auth__minimum__password__length=4
     volumes:
       # bind mount：图数据库持久化在宿主机 DATA_DIR/neo4j，随容器重建/回收不丢

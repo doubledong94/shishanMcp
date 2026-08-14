@@ -8,7 +8,7 @@
 #   ./scripts/deploy-graph.sh --data <数据目录> --password <neo4j密码> \
 #       <宿主机项目绝对路径> [更多项目...]
 #
-# 兼容约束（与 README/deploy.sh 一致）：
+# 兼容约束（与 README 一致）：
 #   - 同路径挂载：宿主机项目绝对路径 = 容器内路径，AI 传绝对路径直接读取
 #   - 项目名 = 目录名；DATA_DIR 是唯一可写挂载点，图数据库持久化在 <DATA_DIR>/neo4j
 #   - 所有服务的项目挂载、路径必须一致（shishan 用 CODE_PROJECTS，scip 用 SCIP_PROJECTS）

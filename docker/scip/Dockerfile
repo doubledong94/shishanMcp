@@ -16,7 +16,7 @@ ARG SCIP_VERSION=v0.9.0
 ARG SCIP_JAVA_VERSION=v0.13.1
 ARG SCIP_CLANG_VERSION=v0.4.0
 
-# 构建代理（deploy.sh 会注入）
+# 构建代理（compose 把 shell 导出的 HTTP_PROXY 等作为 build args 注入，见 README「国内网络」节）
 ARG http_proxy
 ARG https_proxy
 ARG all_proxy

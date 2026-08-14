@@ -64,7 +64,7 @@ registerTool({ cls: SumTool, spec: SumToolSpec });
 
 ```bash
 cd apps/backend && pnpm type-check          # 类型检查
-cd ../.. && ./scripts/deploy.sh <你的挂载项目>  # 重建 + 重启（自动清理旧容器/镜像）
+cd ../.. && ./scripts/deploy-graph.sh --password <密码> <你的挂载项目>  # 重建 + 重启（自动清理旧容器/镜像）
 ```
 
 ## 规则与约定
