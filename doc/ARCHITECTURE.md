@@ -132,19 +132,17 @@ RETURN p
 
 ### 7.1 docker-compose.yml 扩展为 3 services
 
-实际 compose 已按如下落地（`docker-compose.yml`）：所有项目与数据目录都采用**同路径挂载**（容器内路径 = 宿主机路径），mcp 容器不再挂 scip 数据卷（靠网关 RPC 读索引）、`NEO4J_PASSWORD` 用 `${NEO4J_PASSWORD:?}` 强制必填、`CODE_PROJECTS`/`SCIP_PROJECTS` 优先用脚本去重后的 `PROJECT_LIST`（单项目时不会传成 `proj-a:proj-a` 重复），未设时回退 `PROJECT_A:PROJECT_B`。
+实际 compose 已按如下落地（`docker-compose.yml`）：数据目录用**同路径挂载**（容器内路径 = 宿主机路径），项目卷由 `deploy-graph.sh` 动态生成的 override 循环注入（任意 N 个项目、只读）；`NEO4J_PASSWORD` 用 `${NEO4J_PASSWORD:?}` 强制必填、`CODE_PROJECTS`/`SCIP_PROJECTS` 用脚本去重后的 `PROJECT_LIST`（冒号分隔、单项目不会传成 `proj-a:proj-a` 重复）。
 
 ```yaml
 services:
   scip:
     build: { context: ./docker/scip, dockerfile: Dockerfile }
     environment:
-      - SCIP_PROJECTS=${PROJECT_LIST:-${PROJECT_A}:${PROJECT_B}}   # 冒号分隔的项目绝对路径（脚本传去重后的 PROJECT_LIST）
+      - SCIP_PROJECTS=${PROJECT_LIST:?}   # 冒号分隔的项目绝对路径（脚本传去重后的 PROJECT_LIST）
       - SCIP_DATA_ROOT=${DATA_DIR}/scip
     volumes:
-      - ${PROJECT_A}:${PROJECT_A}:ro      # 与 mcp 相同挂载（同路径）
-      - ${PROJECT_B}:${PROJECT_B}:ro
-      - ${DATA_DIR}:${DATA_DIR}
+      - ${DATA_DIR}:${DATA_DIR}             # 项目卷：由脚本 override 注入（同路径只读）
     expose: ["8000"]
     restart: unless-stopped
 
@@ -164,7 +162,7 @@ services:
   shishan:
     # ... 现有配置 ...
     environment:
-      - CODE_PROJECTS=${PROJECT_LIST:-${PROJECT_A}:${PROJECT_B}} # 同路径挂载的项目绝对路径列表（脚本传去重后的 PROJECT_LIST）
+      - CODE_PROJECTS=${PROJECT_LIST:?}    # 同路径挂载的项目绝对路径列表（脚本传去重后的 PROJECT_LIST）
       - DATA_ROOT=${DATA_DIR}                    # 数据目录绝对路径（同路径挂载）
       - SCIP_URL=http://scip:8000
       - NEO4J_URL=bolt://neo4j:7687
@@ -172,9 +170,7 @@ services:
       - NEO4J_PASSWORD=${NEO4J_PASSWORD}
       - GRAPH_VIEW_URL=http://localhost:18081   # query_graph 返回的 viewUrl 前缀
     volumes:
-      - ${PROJECT_A}:${PROJECT_A}:ro
-      - ${PROJECT_B}:${PROJECT_B}:ro
-      - ${DATA_DIR}:${DATA_DIR}                  # 可写数据目录（同路径挂载）
+      - ${DATA_DIR}:${DATA_DIR}                  # 可写数据目录（同路径挂载）；项目卷由脚本 override 注入
     ports:
       - "18081:82"     # ← 新增：代码图谱 3D 页
     depends_on: [scip, neo4j]
@@ -191,7 +187,7 @@ services:
 - `docker/scip/`：`Dockerfile`（`node:20-slim` + go + python3 + JDK17(launcher) + 预装 JDK21/JDK11(清华 Temurin) + Gradle 9.6.1(腾讯镜像) + scip CLI + scip-typescript/scip-python + scip-java + scip-clang[仅 x86_64] + 国内 gradle 仓库镜像 init 脚本）+ `server.js`（无依赖 HTTP job 网关，纯 Node 标准库）。
 
 > **Kotlin 项目已知限制**：镜像内嵌的 scip-kotlinc 基于 Kotlin 2.2.0 编译，对任何 Kotlin 2.2.x+ 项目的编译必崩（`NoSuchMethodError`，FIR 内部 API 无兼容保证）。Java / TS / Python 等不受影响。Kotlin 项目需按版本重编 scip-kotlinc 并走手动 init 脚本流程，详见 `doc/gradle-compat-guide.md`。
-- `scripts/deploy-graph.sh`：`--data <dir> --password <pwd> [--name <前缀>] <项目绝对路径>...`，单项目时 PROJECT_B 复用第一个项目；启动后打印 4 个 Web 地址 + Neo4j + 数据目录。
+- `scripts/deploy-graph.sh`：`--data <dir> --password <pwd> [--name <前缀>] <项目绝对路径>...`，支持任意 N 个项目（循环生成挂载 override 注入 compose）；启动后打印 4 个 Web 地址 + Neo4j + 数据目录。
 
 ## 8. 注意点
 

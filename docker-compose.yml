@@ -16,15 +16,14 @@ services:
     # CODE_PROJECTS = 冒号分隔的项目绝对路径列表（目录名 = 项目名）。
     # 代码挂载只读（:ro），数据目录可写。
     volumes:
-      - ${PROJECT_A:?设置 PROJECT_A=<宿主机项目绝对路径>}:${PROJECT_A:?设置 PROJECT_A}:ro
-      - ${PROJECT_B:?设置 PROJECT_B=<宿主机项目绝对路径>}:${PROJECT_B:?设置 PROJECT_B}:ro
+      # 项目卷由 deploy-graph.sh 生成的 override 注入（任意 N 个项目、同路径只读）
       - ${DATA_DIR:?设置 DATA_DIR=<宿主机数据目录>}:${DATA_DIR:?设置 DATA_DIR}
     environment:
       - NODE_ENV=production
       - MCP_SERVER_NAME=shishan-mcp-server
       # CODE_PROJECTS = 冒号分隔的项目绝对路径列表（目录名 = 项目名）。
-      # 优先用脚本算好的 PROJECT_LIST（去重），未设时回退 PROJECT_A:PROJECT_B。
-      - CODE_PROJECTS=${PROJECT_LIST:-${PROJECT_A}:${PROJECT_B}}
+      # 必填：deploy-graph.sh 传去重后的 PROJECT_LIST；直接用 compose 需自行设置。
+      - CODE_PROJECTS=${PROJECT_LIST:?设置 PROJECT_LIST=<冒号分隔的项目绝对路径列表>}
       - DATA_ROOT=${DATA_DIR:?设置 DATA_DIR}
       # 代码图谱：scip 网关 + Neo4j 地址（走 compose 内部网络）
       - SCIP_URL=http://scip:8000
@@ -54,12 +53,10 @@ services:
     image: shishan-scip:local
     container_name: shishan-scip
     volumes:
-      # 与主容器同路径挂载同一批项目（只读），产出写到共享 DATA_DIR
-      - ${PROJECT_A:?设置 PROJECT_A}:${PROJECT_A:?设置 PROJECT_A}:ro
-      - ${PROJECT_B:?设置 PROJECT_B}:${PROJECT_B:?设置 PROJECT_B}:ro
+      # 与主容器同路径挂载同一批项目（只读）由 override 注入，产出写到共享 DATA_DIR
       - ${DATA_DIR:?设置 DATA_DIR}:${DATA_DIR:?设置 DATA_DIR}
     environment:
-      - SCIP_PROJECTS=${PROJECT_LIST:-${PROJECT_A}:${PROJECT_B}}
+      - SCIP_PROJECTS=${PROJECT_LIST:?设置 PROJECT_LIST}
       - SCIP_DATA_ROOT=${DATA_DIR:?设置 DATA_DIR}/scip
       - PORT=8000
     expose:

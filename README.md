@@ -60,33 +60,26 @@
 ./scripts/deploy-graph.sh --data /path/to/my-data --password my-secret-pass /path/to/proj-a
 ```
 
-> `deploy-graph.sh` 本质是 docker compose 的封装。想直接用 compose 也行，compose 用环境变量（`:?` 强制必填）传参：
+> `deploy-graph.sh` 本质是 docker compose 的封装：它把 N 个项目循环生成**同路径只读挂载**（compose 原生不支持任意数量卷，用脚本生成的 override 注入）。想直接用 compose 也行，compose 用环境变量（`:?` 强制必填）传参，但项目 vmount 需要自己把脚本生成的 override 一并 `-f` 传，最省事还是直接跑脚本：
 >
 > **用 `.env` 文件**（推荐，新建项目根目录 `.env`）：
 >
 > ```bash
-> PROJECT_A=/path/to/proj-a
-> PROJECT_B=/path/to/proj-b        # 可等于 PROJECT_A（单项目时）
-> PROJECT_LIST=$PROJECT_A          # 可选：CODE_PROJECTS/SCIP_PROJECTS 用的去重列表。
->                                  #   单项目时务必这样写，否则会传成 "proj-a:proj-a" 重复；
->                                  #   不设置时回退为 "PROJECT_A:PROJECT_B"。
+> PROJECT_LIST=/path/to/proj-a:/path/to/proj-b   # 冒号分隔的项目绝对路径列表，必填
 > DATA_DIR=$HOME/.shishan-data
-> NEO4J_PASSWORD=your-pass         # 必填
+> NEO4J_PASSWORD=your-pass                       # 必填
 > # HTTP_PROXY=... HTTP 代理可选（国内构建用），见"国内网络"节
 > ```
->
-> 然后 `docker compose up --build`（三容器全起，`NEO4J_PASSWORD` 必填）。
 >
 > **或直接在命令行导出**：
 >
 > ```bash
-> export PROJECT_A=/path/to/proj-a PROJECT_B=/path/to/proj-b
-> export PROJECT_LIST=$PROJECT_A          # 单项目时：去重后的列表，防重复；双项目时 = $PROJECT_A:$PROJECT_B
+> export PROJECT_LIST=/path/to/proj-a:/path/to/proj-b
 > export DATA_DIR=$HOME/.shishan-data NEO4J_PASSWORD=your-pass
-> docker compose up --build
+> docker compose -f docker-compose.yml -f <deploy-graph.sh 生成的唯一 override> up --build
 > ```
 >
-> 不设变量会直接报错（`PROJECT_A:?设置 PROJECT_A=...`），这是正常的。
+> 不设变量会直接报错（`PROJECT_LIST:?设置 PROJECT_LIST=...`），这是正常的。
 
 #### 国内网络：访问 Docker Hub 需要代理
 

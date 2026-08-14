@@ -61,18 +61,32 @@ DATA_DIR="$(cd -P "$DATA_DIR" && pwd -P)"
 # 去重后的项目列表 -> PROJECT_LIST（CODE_PROJECTS / SCIP_PROJECTS 的唯一来源）
 PROJECT_LIST="$(IFS=:; echo "${ABSP[*]}")"
 
+# 动态生成项目挂载 override：compose 原生不支持任意数量卷，仿照 deploy.sh 的思路，
+# 循环把 N 个项目都生成「同路径只读」挂载，注入到 shishan 与 scip 两个容器的 volumes。
+PROJECT_OVERRIDE="$(mktemp "${TMPDIR:-/tmp}/shishan-override-XXXXXX.yml")"
+trap 'rm -f "$PROJECT_OVERRIDE"' EXIT
+{
+  echo "services:"
+  for svc in shishan scip; do
+    echo "  $svc:"
+    echo "    volumes:"
+    for a in "${ABSP[@]}"; do
+      esc="${a//\\/\\\\}"; esc="${esc//\"/\\\"}"
+      printf '      - "%s:%s:ro"\n' "$esc" "$esc"
+    done
+  done
+} > "$PROJECT_OVERRIDE"
+
+# 导出到当前 shell 环境：up/ps/down 每次重新插值 docker-compose.yml 时都能取到，
+# 避免「只有 up 有变量、ps 报 required variable missing」的问题。
+export PROJECT_LIST DATA_DIR NEO4J_PASSWORD
+COMPOSE_F=(-f "$DIR/docker-compose.yml" -f "$PROJECT_OVERRIDE")
+
 echo "==> 停止旧 "${PRE}"-* 容器"
-docker compose -p "$PRE" -f "$DIR/docker-compose.yml" down >/dev/null 2>&1 || true
+docker compose -p "$PRE" "${COMPOSE_F[@]}" down >/dev/null 2>&1 || true
 
 echo "==> 构建并启动"
-PB="${ABSP[1]:-${ABSP[0]}}"  # 单项目时 PROJECT_B 复用（仅用于 volume 挂载；env 用 PROJECT_LIST 已去重）
-PRE="$PRE" \
-  PROJECT_A="${ABSP[0]}" \
-  PROJECT_B="$PB" \
-  PROJECT_LIST="$PROJECT_LIST" \
-  DATA_DIR="$DATA_DIR" \
-  NEO4J_PASSWORD="$NEO4J_PASSWORD" \
-  docker compose -p "$PRE" -f "$DIR/docker-compose.yml" up -d --build
+docker compose -p "$PRE" "${COMPOSE_F[@]}" up -d --build
 
 echo ""
 echo "已启动："
@@ -84,4 +98,4 @@ echo "  Neo4j      : bolt://localhost:7687 (neo4j/$NEO4J_PASSWORD)"
 echo "  数据目录   : ${DATA_DIR}（图数据库在 ${DATA_DIR}/neo4j，随容器回收不丢）"
 echo "  挂载项目（容器内路径 = 宿主机路径）:"
 for a in "${ABSP[@]}"; do echo "    $a"; done
-docker compose -p "$PRE" -f "$DIR/docker-compose.yml" ps
+docker compose -p "$PRE" "${COMPOSE_F[@]}" ps
