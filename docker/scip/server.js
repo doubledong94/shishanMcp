@@ -192,7 +192,13 @@ function runSteps(steps, cwd) {
     const next = () => {
       if (i >= steps.length) return resolve(logs.join("\n"));
       const { cmd, args } = steps[i++];
-      const proc = spawn(cmd, args, { cwd, shell: false });
+      // scip-java 聚合阶段要读回全部 .tree 语法树（okhttp 有数百 MB），默认 JVM 堆（容器内存 25%）
+      // 不够，索引大项目给足堆。
+      const env =
+        cmd === "scip-java"
+          ? { ...process.env, SCIP_JAVA_OPTS: "-Xmx6g" }
+          : process.env;
+      const proc = spawn(cmd, args, { cwd, shell: false, env });
       let out = "";
       proc.stdout.on("data", (d) => {
         out += d;
