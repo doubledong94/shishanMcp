@@ -11,7 +11,7 @@
 | --- | --- | --- | --- | --- |
 | 1 | `build-logic` 配置失败 | `Could not create task ':build-logic:compileKotlin'` / `freeCompilerArgs` provider 提前查询 | scip 插件应用到 kotlin-dsl 预编译脚本构建 | 自定义 init 脚本跳过 build-logic |
 | 2 | `scipPrintDependencies` 崩溃 | `ConcurrentModificationException` | GraalVM native-image 插件并发修改配置 | 跳过 okcurl / native-image-tests |
-| 3 | Kotlin 编译内部错误 | `NoSuchMethodError: CheckerContext.getContainingFile()` | scip-kotlinc 与项目 Kotlin 编译器版本 API 不匹配 | 从源码重新编译 scip-kotlinc 对齐 Kotlin 版本 |
+| 3 | Kotlin 编译内部错误 | `NoSuchMethodError: CheckerContext.getContainingFile()` / `NoClassDefFoundError: ExtensionPointDescriptor` / `Plugin ... incompatible` | scip-kotlinc（及其他编译器插件）与项目 Kotlin 编译器版本 API 不匹配 | 升级项目 Kotlin 对齐 scip-java（见第 3 节） |
 
 ---
 
@@ -94,9 +94,9 @@ docker run --rm -v "$PWD:/e" ghcr.io/scip-code/scip-java:latest sh -c '
 '
 ```
 
-> **Kotlin 项目必须用第 3 节重编的 scip-kotlinc.jar 覆盖这里提取的版本**（`gradle-plugin.jar`
-> 和 `scip-plugin.jar` 是 Java 插件，不依赖 Kotlin 版本，直接用提取版即可）。若直接拿提取的
-> scip-kotlinc.jar 跑 Kotlin 2.2.x+ 项目会崩。
+> **Kotlin 项目直接用官方提取版会崩**（scip-kotlinc 基于 2.2.0 编译，对 2.2.x+ 项目必崩）。
+> Kotlin 项目的正确做法是第 3 节：**升级项目 Kotlin 对齐 scip-java**，然后走标准
+> `scip-java index`，无需此手动流程。以下手动流程仅供不便升级构建文件的场景参考。
 
 手动执行（替代 `scip-java index`）：
 
@@ -153,18 +153,21 @@ def skip = project.rootDir.name == "build-logic"
 
 ---
 
-## 3. Kotlin 编译器版本不匹配（NoSuchMethodError）
+## 3. Kotlin 编译器版本不匹配
 
 ### 问题现象
 
-Kotlin 模块编译时崩溃：
+Kotlin 模块编译时崩溃，具体报错随"谁比谁新"而不同：
 
-```
-e: org.jetbrains.kotlin.util.FileAnalysisException: ...
-   java.lang.NoSuchMethodError: 'org.jetbrains.kotlin.fir.declarations.FirFile
-     org.jetbrains.kotlin.fir.analysis.checkers.context.CheckerContext.getContainingFile()'
-e: Compiler terminated with internal error
-```
+- **scip-kotlinc 比项目新**（如 main 分支的 2.4 插件跑在 Kotlin 2.2.x 项目）：
+  `NoClassDefFoundError: org/jetbrains/kotlin/extensions/ExtensionPointDescriptor`
+  （Kotlin 2.4 才引入的 API，2.2 编译器里不存在）+ `Compiler terminated with internal error`
+- **scip-kotlinc 比项目旧**（如官方 jar 的 2.2.0 插件跑在 2.2.x 项目）：
+  `NoSuchMethodError: ... CheckerContext.getContainingFile()`
+  （2.2.0 → 2.2.21 该 API 已改名 `getContainingFileSymbol`）
+- **升级项目 Kotlin 后，项目里其他编译器插件没跟上**：
+  `Plugin app.cash.burst.kotlin.BurstCompilerPluginRegistrar is incompatible with the
+  current version of the compiler`（如 okhttp 的 burst）
 
 ### 根因
 
@@ -179,44 +182,45 @@ e: Compiler terminated with internal error
 > 注意：KSP 版本 ≠ Kotlin 版本。OkHttp 的 KSP 是 `2.3.10`，但 Kotlin 实际是 `2.2.21`，
 > 判断前一定要看 `gradle/libs.versions.toml` 里的 `kotlin = ...`。
 
-### 解决方案：从源码重新编译 scip-kotlinc，对齐项目 Kotlin 版本
+### 解决方案：升级项目 Kotlin，对齐 scip-java
 
-1. 用**接近项目 Kotlin 版本**的 scip-java 源码标签（`v0.13.1` 用的是 Kotlin 2.2.0，
-   与 2.2.21 同代；main 分支用 2.4.10 反而更难适配）。
-2. 修改 `gradle/libs.versions.toml` 把 `kotlin` 对齐到项目版本。
-3. 给 `scip.kotlin-jvm` 约定插件加 `-Xcontext-parameters`（源码用了 context parameters）。
-4. 修补 FIR API 差异。以 v0.13.1 适配 Kotlin 2.2.21 为例，共 3 处：
+`scip-kotlinc` 与目标项目的 Kotlin 编译器**硬绑定**，必须一致。唯一做法是**升项目**：
+把目标项目的 Kotlin 升级到 scip-java 所用版本（fork main = **2.4.10**），保留 fork 全部
+自定义增强，直接走标准 `scip-java index` 流程，**不重编 scip-kotlinc、不走手动流程**。
 
-| 位置 | 2.4.x 写法 | 2.2.21 写法 |
-| --- | --- | --- |
-| `AnalyzerCheckers.kt` | `context.containingFile?.sourceFile` | `context.containingFileSymbol?.sourceFile` |
-| `ScipTextDocumentBuilder.kt` | `firBasedSymbol.directOverriddenSymbolsSafe(context)` | 降级为 `emptyList()`（该方法在 2.2.21 变为 context 参数函数） |
-| `ScipTextDocumentBuilder.kt` | `callableId.callableName` | `callableId?.callableName ?: name`（2.2.21 可为空） |
+以 fork main 索引 okhttp（原 Kotlin 2.2.21）为例，实测通过：
+`clean scipPrintDependencies scipCompileAll` 编译全绿。步骤如下：
 
-5. 构建并替换 jar：
+1. `gradle/libs.versions.toml`：`kotlin = "2.2.21"` → `"2.4.10"`
+2. **同步项目里其他 Kotlin 编译器插件**（它们同样硬绑定，跟不上会报
+   `Plugin ... incompatible with the current version of the compiler`）：
+   - okhttp 遇到 `app.cash.burst`：官方矩阵 Kotlin 2.4.0 ↔ Burst **2.13.0**，
+     原 `burst = "2.10.2"`（仅支持 2.2.x）→ `"2.13.0"`
+   - `kotlinx-serialization` 跟随 KGP（`version.ref = kotlin`），无需动
+   - KSP 自 2.3.0 起**与 Kotlin 解耦**，okhttp 的 `2.3.10` 兼容 2.4，无需动
+3. **处理 kotlin-test 双框架 capability 冲突**（Kotlin 2.4 新增约束）：
+   `kotlin-test-junit` 与 `kotlin-test-junit5` 共享 capability
+   `kotlin-test-framework-impl`，同模块显式用 JUnit4 变体、又被 `kotlin-test`
+   带入 JUnit5 变体时 → `Cannot select module with conflict on capability
+   'kotlin-test-framework-impl'`。修法：模块里只保留一个框架，例如 okhttp 主用
+   JUnit4（含 vintage engine）：
 
-```sh
-gradle --no-daemon --no-configuration-cache :scip-kotlinc:shadowJar
-# 产物: scip-kotlinc/build/libs/scip-kotlinc-*-all.jar
-```
+   ```kotlin
+   // okhttp/build.gradle.kts
+   configurations.configureEach {
+     exclude(group = "org.jetbrains.kotlin", module = "kotlin-test-junit5")
+   }
+   ```
 
-6. **把重编 jar 放到手动流程的 jar 目录**（覆盖官方提取的 2.2.0 版，见第 6 节）：
+4. 边界：KGP 2.4 官方支持 Gradle ≤ 9.5.0 / AGP ≤ 9.1.0；okhttp 实测 9.6.1 + AGP 9.1.1
+   越界仍可构建（与 2.2.21 时同样越界的情形一致，可容忍）。AGP 9 内建 Kotlin
+   （`android.builtInKotlin=true`）会把低于 2.2.10 的 KGP 自动提到 2.2.10，声明更高版本
+   需显式——okhttp 本就是显式声明 2.4.10，无冲突。
 
-```sh
-cp scip-kotlinc/build/libs/scip-kotlinc-*-all.jar /scip-jars/scip-kotlinc.jar
-```
-
-> 关键：`scip-java index` 自动流程会从 fat-jar 内嵌资源提取它自己的 scip-kotlinc.jar
-> 到临时目录（`/tmp/scip-javaXXXX/`），**无法注入重编版**。因此凡是 Kotlin 项目（含 KMP/
-> 多模块 Kotlin），**必须走第 6 节的手动流程**，并让 `scip-manual.gradle` 里的
-> `scipKotlincJar` 指向 `/scip-jars/scip-kotlinc.jar`（重编版）。纯 Java 项目无此限制，
-> 可直接用 `scip-java index`。
-
-### 代价
-
-- 方法 `override` 关系会缺失（`directOverriddenSymbolsSafe` 降级为空），但定义、引用、hover
-  等核心导航不受影响。
-- 重新编译的 scip-kotlinc **只对匹配的 Kotlin 版本**有效，换项目时需按版本重编。
+代价：改动了被索引项目的构建文件（版本号 / 依赖）。注意：本方案只解决**编译阶段**
+兼容；fork 自定义"语法树"（commit `c921e5d4`）在聚合阶段另有
+`ScipAggregator.emitMergedTrees` 深递归栈溢出问题（okhttp 索引只聚合出 ~13MB 半成品，
+完整约 28MB），与本节 Kotlin 兼容无关，属独立 bug 需另行定位。
 
 ---
 
@@ -320,8 +324,10 @@ org.gradle.java.installations.paths=/opt/jdk21,/opt/jdk11
    [china-network-guide.md](china-network-guide.md) 的镜像方案。
 2. **看是不是 build-logic**：错误定位到 `:build-logic:*` 且提到 `freeCompilerArgs` /
    `generatePrecompiledScriptPluginAccessors` → 用本节方案跳过 build-logic。
-3. **看是不是 Kotlin 版本**：`NoSuchMethodError` / `Compiler terminated with internal error`
-   且堆栈里是 `org.jetbrains.kotlin.fir.*` → 重编 scip-kotlinc 对齐版本。
+3. **看是不是 Kotlin 版本**：`NoSuchMethodError` / `NoClassDefFoundError` /
+   `Plugin ... incompatible with the current version of the compiler`，且堆栈里是
+   `org.jetbrains.kotlin.fir.*` → 第 3 节：**升级项目 Kotlin 对齐 scip-java**
+   （并同步其他编译器插件）。
 4. **看是不是 Graal 模块**：`ConcurrentModificationException` 在 `scipPrintDependencies` →
    跳过该模块。
 5. **看是不是 toolchain 缺失**：`Cannot find a Java installation ... matching: {languageVersion=N}` →
@@ -361,12 +367,12 @@ scip-java aggregate --targetroot=<targetroot> --output=index.scip
 
 | 项目类型 | 用什么流程 | 原因 |
 | --- | --- | --- |
-| 纯 Java | `scip-java index`（自动） | 不涉及 scip-kotlinc，官方 jar 即可 |
-| Kotlin（含 KMP/多 Kotlin 模块） | **手动流程** + 按版本重编 scip-kotlinc | 官方 scip-kotlinc 基于 Kotlin 2.2.0 编译，对 2.2.x+ 项目必崩（第 3 节） |
+| 纯 Java | `scip-java index`（自动） | 不涉及 scip-kotlinc |
+| Kotlin（含 KMP/多 Kotlin 模块） | **升级项目 Kotlin 对齐 scip-java**（fork main 2.4 直接可用）→ `scip-java index` | kotlinc 插件与项目 Kotlin 必须版本匹配（第 3 节） |
 
 ### 验证（以 OkHttp 为例，实测通过）
 
-- 全量 `clean scipPrintDependencies scipCompileAll` → `BUILD SUCCESSFUL in ~1m12s`
-  （Kotlin 2.2.21 对齐后，见第 3 节）。
-- 聚合产出 `index.scip`（OkHttp ≈ 28MB / 553 个 SCIP 分片），含 `src/jvmMain` 与
-  `jvmTest` 测试源码文件。
+- 升级 Kotlin 2.4.10 对齐 fork main 后：全量 `clean scipPrintDependencies scipCompileAll`
+  → `BUILD SUCCESSFUL`，编译全绿，直接走 `scip-java index`。
+- 尚未完全通过的是聚合阶段：fork 自定义语法树在 `ScipAggregator.emitMergedTrees` 深递归
+  栈溢出（独立 bug，见第 3 节末尾），产出为部分 index.scip（≈13MB，完整约 28MB）。

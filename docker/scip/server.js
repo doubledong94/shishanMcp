@@ -179,18 +179,29 @@ function json(res, code, obj) {
   res.end(text);
 }
 
-/** 运行命令序列，失败即中止并返回错误。 */
+/** 运行命令序列，失败即中止并返回错误。同时把子进程输出实时 tee 到
+ *  <工作目录>/../build.log（即 <DATA_ROOT>/<project>/build.log，同路径挂载，
+ *  宿主机可直接 tail -f 流式查看编译进度）。
+ */
 function runSteps(steps, cwd) {
   return new Promise((resolve, reject) => {
     let i = 0;
     const logs = [];
+    const logFile = path.resolve(cwd, "..", "build.log");
+    fs.writeFileSync(logFile, "");
     const next = () => {
       if (i >= steps.length) return resolve(logs.join("\n"));
       const { cmd, args } = steps[i++];
       const proc = spawn(cmd, args, { cwd, shell: false });
       let out = "";
-      proc.stdout.on("data", (d) => (out += d));
-      proc.stderr.on("data", (d) => (out += d));
+      proc.stdout.on("data", (d) => {
+        out += d;
+        fs.appendFileSync(logFile, d);
+      });
+      proc.stderr.on("data", (d) => {
+        out += d;
+        fs.appendFileSync(logFile, d);
+      });
       proc.on("error", (err) =>
         reject(new Error(`无法启动 ${cmd}: ${err.message}\n${out}`)),
       );

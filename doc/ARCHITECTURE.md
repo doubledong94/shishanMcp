@@ -186,7 +186,7 @@ services:
 
 - `docker/scip/`：`Dockerfile`（`node:20-slim` + go + python3 + JDK17(launcher) + 预装 JDK21/JDK11(清华 Temurin) + Gradle 9.6.1(腾讯镜像) + scip CLI + scip-typescript/scip-python + scip-java + scip-clang[仅 x86_64] + 国内 gradle 仓库镜像 init 脚本）+ `server.js`（无依赖 HTTP job 网关，纯 Node 标准库）。
 
-> **Kotlin 项目已知限制**：镜像内嵌的 scip-kotlinc 基于 Kotlin 2.2.0 编译，对任何 Kotlin 2.2.x+ 项目的编译必崩（`NoSuchMethodError`，FIR 内部 API 无兼容保证）。Java / TS / Python 等不受影响。Kotlin 项目需按版本重编 scip-kotlinc 并走手动 init 脚本流程，详见 `doc/gradle-compat-guide.md`。
+> **Kotlin 项目已知限制**：镜像内嵌的 scip-kotlinc 基于 Kotlin 2.2.0 编译，对任何 Kotlin 2.2.x+ 项目的编译必崩（`NoSuchMethodError`，FIR 内部 API 无兼容保证）。Java / TS / Python 等不受影响。Kotlin 项目的统一解法：**升级项目 Kotlin 到 2.4.10 对齐 fork main**（保留自定义增强，走标准 `scip-java index` 流程），详见 `doc/gradle-compat-guide.md` 第 3 节。
 - `scripts/deploy-graph.sh`：`--data <dir> --password <pwd> [--name <前缀>] <项目绝对路径>...`，支持任意 N 个项目（循环生成挂载 override 注入 compose）；启动后打印 4 个 Web 地址 + Neo4j + 数据目录。
 
 ## 8. 注意点
