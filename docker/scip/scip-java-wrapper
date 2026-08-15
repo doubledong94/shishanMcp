@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+# scip-java 包装脚本：deploy-graph.sh --scip-java <本地dist> 时挂载到
+# /usr/local/bin/scip-java，用它替换镜像内置的官方 scip-java。
+# 思路同 scip-java 仓库 bin/scip-java-docker-script.sh，但去掉了 coursier 选 JDK
+# 的环节（shishanMcp 的 scip 镜像没有 coursier，直接用系统 JDK 跑）。
+set -eu
+
+if [ -f /app/scip-java/javac-jvm-options ]; then
+  JAVA_OPTS="$(cat /app/scip-java/javac-jvm-options)"
+  export JAVA_OPTS
+fi
+
+exec /app/scip-java/bin/scip-java "$@"

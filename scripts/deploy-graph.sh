@@ -15,8 +15,9 @@
 set -euo pipefail
 
 if [ "$#" -lt 1 ]; then
-  echo "用法: $0 [--project <abs>]... [--data <dir>] [--password <pwd>] [--name <容器名前缀>]" >&2
+  echo "用法: $0 [--project <abs>]... [--data <dir>] [--password <pwd>] [--name <容器名前缀>] [--scip-java <dist>]" >&2
   echo "     至少传一个宿主机项目绝对路径。" >&2
+  echo "     --scip-java <dist>：用本地编译的 scip-java 发行版（installDist 目录）替换 scip 容器内置版本" >&2
   exit 1
 fi
 
@@ -24,6 +25,7 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DATA_DIR="${SHISHAN_DATA_DIR:-$HOME/.shishan-data}"
 NEO4J_PASSWORD="${NEO4J_PASSWORD:-}"
 PRE="shishan"
+SCIP_JAVA_DIST=""
 
 PROJECTS=()
 while [ "$#" -gt 0 ]; do
@@ -32,6 +34,7 @@ while [ "$#" -gt 0 ]; do
     --data)    [ "$#" -lt 2 ] && { echo "--data 需要值" >&2; exit 1; }; DATA_DIR="$2"; shift 2;;
     --password)[ "$#" -lt 2 ] && { echo "--password 需要值" >&2; exit 1; }; NEO4J_PASSWORD="$2"; shift 2;;
     --name)    [ "$#" -lt 2 ] && { echo "--name 需要值" >&2; exit 1; }; PRE="$2"; shift 2;;
+    --scip-java) [ "$#" -lt 2 ] && { echo "--scip-java 需要值" >&2; exit 1; }; SCIP_JAVA_DIST="$2"; shift 2;;
     -*) echo "未知参数: $1" >&2; exit 1;;
     *)  PROJECTS+=("$1"); shift;;
   esac
@@ -58,6 +61,16 @@ fi
 mkdir -p "$DATA_DIR"/neo4j/data "$DATA_DIR"/neo4j/logs "$DATA_DIR"/scip "$DATA_DIR"/ast "$DATA_DIR"/projects
 DATA_DIR="$(cd -P "$DATA_DIR" && pwd -P)"
 
+# --scip-java 指向本地编译的 scip-java 发行版目录（gradle :scip-java:installDist 的产物），
+# 运行时挂载到 scip 容器替换官方版本。校验目录存在且有可执行的 bin/scip-java。
+if [ -n "$SCIP_JAVA_DIST" ]; then
+  SCIP_JAVA_DIST="$(cd -P "$SCIP_JAVA_DIST" && pwd -P)"
+  if [ ! -x "$SCIP_JAVA_DIST/bin/scip-java" ]; then
+    echo "错误: --scip-java 目录里没有可执行的 bin/scip-java: $SCIP_JAVA_DIST" >&2
+    exit 1
+  fi
+fi
+
 # 去重后的项目列表 -> PROJECT_LIST（CODE_PROJECTS / SCIP_PROJECTS 的唯一来源）
 PROJECT_LIST="$(IFS=:; echo "${ABSP[*]}")"
 
@@ -74,6 +87,12 @@ trap 'rm -f "$PROJECT_OVERRIDE"' EXIT
       esc="${a//\\/\\\\}"; esc="${esc//\"/\\\"}"
       printf '      - "%s:%s:ro"\n' "$esc" "$esc"
     done
+    if [ "$svc" = "scip" ] && [ -n "$SCIP_JAVA_DIST" ]; then
+      esc="${SCIP_JAVA_DIST//\\/\\\\}"; esc="${esc//\"/\\\"}"
+      printf '      - "%s:/app/scip-java:ro"\n' "$esc"
+      esc="${DIR//\\/\\\\}"; esc="${esc//\"/\\\"}"
+      printf '      - "%s/docker/scip/scip-java-wrapper:/usr/local/bin/scip-java:ro"\n' "$esc"
+    fi
   done
 } > "$PROJECT_OVERRIDE"
 
@@ -98,4 +117,7 @@ echo "  Neo4j      : bolt://localhost:7687 (neo4j/$NEO4J_PASSWORD)"
 echo "  数据目录   : ${DATA_DIR}（图数据库在 ${DATA_DIR}/neo4j，随容器回收不丢）"
 echo "  挂载项目（容器内路径 = 宿主机路径）:"
 for a in "${ABSP[@]}"; do echo "    $a"; done
+if [ -n "$SCIP_JAVA_DIST" ]; then
+  echo "  scip-java : 本地发行版替换（${SCIP_JAVA_DIST}）"
+fi
 docker compose -p "$PRE" "${COMPOSE_F[@]}" ps
