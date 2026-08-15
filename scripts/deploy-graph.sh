@@ -61,6 +61,14 @@ fi
 mkdir -p "$DATA_DIR"/neo4j/data "$DATA_DIR"/neo4j/logs "$DATA_DIR"/scip "$DATA_DIR"/ast "$DATA_DIR"/projects
 DATA_DIR="$(cd -P "$DATA_DIR" && pwd -P)"
 
+# Gradle 依赖缓存持久化：scip 容器把 /home/scip/.gradle 挂到 $DATA_DIR/scip/gradle-home，
+# 容器重建不重复下载依赖。镜像内置的 init.d 镜像脚本会被挂载覆盖，需在宿主侧重建。
+SCIP_GRADLE_HOME="$DATA_DIR/scip/gradle-home"
+mkdir -p "$SCIP_GRADLE_HOME/init.d"
+if [ ! -f "$SCIP_GRADLE_HOME/init.d/scip-repos.gradle" ]; then
+  cp "$DIR/docker/scip/scip-repos.gradle" "$SCIP_GRADLE_HOME/init.d/scip-repos.gradle"
+fi
+
 # --scip-java 指向本地编译的 scip-java 发行版目录（gradle :scip-java:installDist 的产物），
 # 运行时挂载到 scip 容器替换官方版本。校验目录存在且有可执行的 bin/scip-java。
 if [ -n "$SCIP_JAVA_DIST" ]; then

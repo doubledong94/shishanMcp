@@ -55,6 +55,9 @@ services:
     volumes:
       # 与主容器同路径挂载同一批项目（只读）由 override 注入，产出写到共享 DATA_DIR
       - ${DATA_DIR:?设置 DATA_DIR}:${DATA_DIR:?设置 DATA_DIR}
+      # Gradle 依赖缓存持久化：挂到容器 /home/scip/.gradle，容器重建不重复下载
+      # （首次需重下依赖；init.d 的国内镜像脚本由 deploy-graph.sh 从 docker/scip/scip-repos.gradle 种子化）
+      - ${DATA_DIR:?设置 DATA_DIR}/scip/gradle-home:/home/scip/.gradle
     environment:
       - SCIP_PROJECTS=${PROJECT_LIST:?设置 PROJECT_LIST}
       - SCIP_DATA_ROOT=${DATA_DIR:?设置 DATA_DIR}/scip
