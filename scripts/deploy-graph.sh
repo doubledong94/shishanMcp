@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # 代码图谱版部署：用 docker compose 一键启动 3 个服务
-#   shishan-mcp（MCP + nginx + tree-sitter + Three.js 图页）
+#   shishan-mcp（MCP + nginx + Three.js 图页）
 #   shishan-scip（scip 索引网关）
 #   shishan-neo4j（图数据库，数据 bind mount 到宿主机）
 #
@@ -58,7 +58,7 @@ if [ "${#ABSP[@]}" -lt 1 ]; then
   echo "至少需要一个宿主机项目路径。" >&2; exit 1
 fi
 
-mkdir -p "$DATA_DIR"/neo4j/data "$DATA_DIR"/neo4j/logs "$DATA_DIR"/scip "$DATA_DIR"/ast "$DATA_DIR"/projects
+mkdir -p "$DATA_DIR"/neo4j/data "$DATA_DIR"/neo4j/logs "$DATA_DIR"/scip "$DATA_DIR"/projects
 DATA_DIR="$(cd -P "$DATA_DIR" && pwd -P)"
 
 # Gradle 依赖缓存持久化：scip 容器把 /home/scip/.gradle 挂到 $DATA_DIR/scip/gradle-home，

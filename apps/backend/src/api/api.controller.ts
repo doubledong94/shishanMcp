@@ -5,7 +5,6 @@ import { DataStoreService } from "../core/data-store.service";
 import { CodeReaderService } from "../core/code-reader.service";
 import { GraphService } from "../core/graph/graph.service";
 import { ScipIndexViewerService } from "../core/graph/scip-index-viewer.service";
-import { AstViewerService } from "../core/graph/ast-viewer.service";
 import { TOOL_REGISTRY } from "../tools/registry";
 import { describeAllTools } from "../tools";
 
@@ -28,7 +27,6 @@ export class ApiController {
     private readonly reader: CodeReaderService,
     private readonly graph: GraphService,
     private readonly scipViewer: ScipIndexViewerService,
-    private readonly astViewer: AstViewerService,
     private readonly moduleRef: ModuleRef,
   ) {}
 
@@ -117,26 +115,6 @@ export class ApiController {
       throw new BadRequestException("缺少 path 参数（文档相对路径）");
     }
     return this.scipViewer.document(project, relativePath);
-  }
-
-  /** 语法树文件列表 + 语言统计（供调试页语法树查看器）。 */
-  @Get("ast/:project/summary")
-  async getAstSummary(@Param("project") project: string) {
-    this.astViewer.assertMounted(project);
-    return this.astViewer.summary(project);
-  }
-
-  /** 读取单个语法树文件（AST 节点树）。 */
-  @Get("ast/:project/tree")
-  async getAstTree(
-    @Param("project") project: string,
-    @Query("ast") astPath?: string,
-  ) {
-    this.astViewer.assertMounted(project);
-    if (!astPath) {
-      throw new BadRequestException("缺少 ast 参数（ast 文件相对路径）");
-    }
-    return this.astViewer.tree(project, astPath);
   }
 
   /** 加载某个图视图快照（供 Three.js 渲染）。 */

@@ -1,15 +1,10 @@
 # ---------- Stage 1: backend deps + build ----------
-# node:20-slim（debian/glibc）：tree-sitter-language-pack 只发布 glibc 绑定，
-# alpine(musl) 上永远无法加载（arm64 的 isMusl() 检测 bug + 无 musl 绑定）。
 FROM node:20-slim AS backend-build
 # npm 走 npmmirror + apt 走清华源（国内网络无需 VPN）
 ENV npm_config_registry=https://registry.npmmirror.com \
     npm_config_replace_registry_host=always
 RUN sed -i 's|https\?://[^/]*deb\.debian\.org/debian-security|http://mirrors.tuna.tsinghua.edu.cn/debian-security|g; s|https\?://[^/]*deb\.debian\.org/debian|http://mirrors.tuna.tsinghua.edu.cn/debian|g' /etc/apt/sources.list.d/debian.sources 2>/dev/null || \
     sed -i 's|https\?://[^/]*deb.debian.org|http://mirrors.tuna.tsinghua.edu.cn/debian|g' /etc/apt/sources.list 2>/dev/null
-# tree-sitter 等原生模块需要 node-gyp 编译链（python3 + make + g++）
-RUN apt-get update && apt-get install -y --no-install-recommends python3 make g++ linux-headers-generic \
-    && rm -rf /var/lib/apt/lists/*
 WORKDIR /build/backend
 COPY apps/backend/package.json apps/backend/package-lock.json ./
 RUN npm ci

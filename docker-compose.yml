@@ -1,5 +1,5 @@
 services:
-  # ---- 主 MCP 容器：NestJS + nginx + tree-sitter + Three.js 图页 ----
+  # ---- 主 MCP 容器：NestJS + nginx + Three.js 图页 ----
   shishan:
     build:
       context: .

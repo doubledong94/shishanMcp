@@ -5,12 +5,10 @@ import { CallLogService } from "./call-log.service";
 import { CodeReaderService } from "./code-reader.service";
 import { DataStoreService } from "./data-store.service";
 import { GraphConfig } from "./graph/graph-config";
-import { TreeSitterService } from "./graph/tree-sitter.service";
 import { ScipClientService } from "./graph/scip-client.service";
 import { Neo4jService } from "./graph/neo4j.service";
 import { GraphService } from "./graph/graph.service";
 import { ScipIndexViewerService } from "./graph/scip-index-viewer.service";
-import { AstViewerService } from "./graph/ast-viewer.service";
 
 /**
  * CoreModule provides the business logic + the native (Python/C++) executors +
@@ -25,12 +23,10 @@ import { AstViewerService } from "./graph/ast-viewer.service";
     CodeReaderService,
     DataStoreService,
     GraphConfig,
-    TreeSitterService,
     ScipClientService,
     Neo4jService,
     GraphService,
     ScipIndexViewerService,
-    AstViewerService,
   ],
   exports: [
     NativePaths,
@@ -40,7 +36,6 @@ import { AstViewerService } from "./graph/ast-viewer.service";
     DataStoreService,
     GraphService,
     ScipIndexViewerService,
-    AstViewerService,
   ],
 })
 export class CoreModule {}

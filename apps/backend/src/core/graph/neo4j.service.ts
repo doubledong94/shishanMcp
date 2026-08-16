@@ -43,8 +43,6 @@ export class Neo4jService {
         "CREATE CONSTRAINT project_id IF NOT EXISTS FOR (p:Project) REQUIRE p.id IS UNIQUE",
         "CREATE INDEX file_uniq IF NOT EXISTS FOR (f:File) ON (f.projectId, f.path)",
         "CREATE INDEX symbol_name IF NOT EXISTS FOR (s:Symbol) ON (s.name)",
-        "CREATE INDEX syntax_kind IF NOT EXISTS FOR (n:SyntaxNode) ON (n.kind)",
-        "CREATE INDEX syntax_file IF NOT EXISTS FOR (n:SyntaxNode) ON (n.projectId, n.filePath)",
       ]) {
         await session.run(q);
       }

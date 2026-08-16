@@ -1,6 +1,6 @@
 # shishan 代码图谱 MCP —— 架构与部署设计
 
-本文档设计一个**代码图谱 MCP**（Docker 应用）：对挂载的项目生成 `index.scip` 与 tree-sitter 语法树，导入 Neo4j 图数据库，AI 通过 cypher 查询路径并渲染到 Three.js 前端；所有图数据库数据持久化在宿主机本地，不随容器回收丢失。
+本文档设计一个**代码图谱 MCP**（Docker 应用）：对挂载的项目生成 `index.scip`，导入 Neo4j 图数据库，AI 通过 cypher 查询路径并渲染到 Three.js 前端；所有图数据库数据持久化在宿主机本地，不随容器回收丢失。
 
 > 本文档是**已落地实现的架构说明**，与 `apps/backend/src/core/graph/`、`docker/scip/`、`apps/graph-app/`、`docker-compose.yml` 的实际代码保持一致。
 
@@ -20,9 +20,8 @@
 │  │  mcp  (shishan-mcp:local)    │   :13000 MCP / :18080 控制台│
 │  │   NestJS MCP backend          │   :18081 Three.js 图谱页  │
 │  │  + nginx                      │                          │
-│  │  + 内嵌 tree-sitter-language-pack（306 语言，按需加载）   │
-│  │  工具: generate_scip_index / generate_syntax_tree /      │
-│  │        import_to_graph / query_graph                     │
+│  │  工具: generate_scip_index / import_to_graph /           │
+│  │        query_graph                                       │
 │  │  挂载: <项目>:<同路径>:ro  $DATA:同路径(可写)             │
 │  └───┬──────────┬────────────┬──┘                          │
 │      │HTTP(8000)│Bolt(7687)  │                             │
@@ -39,7 +38,7 @@
 
 | 容器 | 镜像/技术 | 对外端口 | 职责 |
 | --- | --- | --- | --- |
-| `mcp` | 现有 NestJS + nginx | 13000 / 18080 / 18081 | MCP 编排、tree-sitter 语法树、cypher 查询、Three.js 图谱页 |
+| `mcp` | 现有 NestJS + nginx | 13000 / 18080 / 18081 | MCP 编排、cypher 查询、Three.js 图谱页 |
 | `scip` | 自建网关（见 §3） | 8000（仅内网） | 生成 `index.scip`，转换 protobuf → JSON |
 | `neo4j` | `neo4j:2026-community` | 7687 / 7474 | 图数据库，数据绑定挂载宿主机目录 |
 
@@ -71,15 +70,14 @@ SCIP 是 protobuf 协议，且**每个语言一个 indexer**（Sourcegraph 官�
   - C/C++（`scip-clang`）：`--compdb-path=compile_commands.json`（项目根需有编译数据库）
   - 已知坑：`scip-python` 0.6.6 与 Python 3.9 的旧 pip 元数据不兼容（`PathDistribution` 无 `.name`），镜像里装 Python 3.11+ 可规避；`scip-clang` 没有 arm64-linux 资产，Apple Silicon 上做 `linux/arm64` 容器时 C/C++ 索引不可用。
 
-**注意**：部分 indexer 需要项目依赖（scip-typescript 通常要 `npm install`、scip-python 要 venv），覆盖语言有限。这正好与 tree-sitter 的 306 语言互补——**scip 提供精确符号图，tree-sitter 提供全语言语法树**。scip 无 indexer 的语言，导入层自动降级为只建语法树子图（`import_to_graph` 捕获读索引失败并跳过符号图）。
+**注意**：部分 indexer 需要项目依赖（scip-typescript 通常要 `npm install`、scip-python 要 venv），覆盖语言有限（约 9 种）。scip 无对应 indexer 的语言，`import_to_graph` 捕获读索引失败并跳过符号图。
 
 ## 4. MCP 工具集与数据流
 
 | 工具 | 入参 | 行为 |
 | --- | --- | --- |
 | `generate_scip_index` | `project, language` | 调 scip 网关 `POST /api/jobs`，轮询完成后写 `$DATA/scip/<proj>/index.scip` |
-| `generate_syntax_tree` | `project, language?` | 容器内 tree-sitter-language-pack 解析，产出 `$DATA/ast/<proj>/*.json` |
-| `import_to_graph` | `project` | 读 index.scip（走网关 `GET /api/index/:project` 转 JSON）+ AST，UNWIND 批量写入 Neo4j；scip 索引缺失时降级为只建语法树子图 |
+| `import_to_graph` | `project` | 读 index.scip（走网关 `GET /api/index/:project` 转 JSON），UNWIND 批量写入 Neo4j（签名/引用） |
 | `query_graph` | `project, cypher` | 对 Neo4j 执行 cypher，把返回的 Path/Node/Relationship 抽成 nodes/edges，**存快照**到 `$DATA/projects/<proj>/<viewId>.json`，返回视图 URL（`http://localhost:18081/#/view/<proj>/<viewId>`） |
 
 前端渲染链路：Agent 调 `query_graph` → 后端执行 cypher → 抽取节点+边 JSON → 存快照 → Three.js 页面按 hash 路由 `#/view/<proj>/<viewId>` 加载快照渲染。
@@ -88,17 +86,12 @@ SCIP 是 protobuf 协议，且**每个语言一个 indexer**（Sourcegraph 官�
 
 ```
 (:Project)-[:CONTAINS]->(:File)
-(:File)-[:HAS_AST]->(:SyntaxNode)        -- tree-sitter 语法树（根节点）
-(:SyntaxNode)-[:BELONGS_TO]->(:File)     -- 语法树节点 -> 所属文件（反向）
-(:SyntaxNode)-[:CHILD]->(:SyntaxNode)    -- 语法树父子关系
 (:File)-[:HAS_SYMBOL]->(:Symbol)         -- scip 符号声明所在文件
 (:Symbol)-[:REFERENCES]->(:Symbol)       -- scip 精确引用（跨文件）
-(:Symbol)-[:DECLARED_AT]->(:SyntaxNode)  -- 按 文件路径+字节区间 关联两条数据源
 ```
 
-- `File`：`{path, language, projectId}`（普通索引 path+projectId，**不用 NODE KEY——Community 版不支持**）
-- `SyntaxNode`：`{kind, name?, start, end, filePath, projectId}`
-- `Symbol`：`{name, kind?, signature, filePath, projectId}`（SCIP symbol，带语义层级）
+- `File`：`{path, filePath, projectId}`（普通索引 path+projectId，**不用 NODE KEY——Community 版不支持**）
+- `Symbol`：`{name, signature, filePath, projectId}`（SCIP symbol，带语义层级）
 
 典型查询（Agent 提供 cypher）：
 
@@ -123,8 +116,6 @@ RETURN p
 ~/.shishan-data/
 ├── neo4j/{data,logs}   ← 图数据库（bind mount，永不丢）
 ├── scip/<proj>/index.scip   ← scip 网关产出
-├── ast/<proj>/              ← 语法树 JSON
-├── ts-cache/                ← tree-sitter grammar 下载缓存（重建容器不重下）
 └── projects/<proj>/<viewId>.json  ← query_graph 图视图快照
 ```
 
@@ -178,8 +169,8 @@ services:
 
 ### 7.2 Dockerfile
 
-- backend 依赖加 `@kreuzberg/tree-sitter-language-pack`。⚠️ **基础镜像必须用 `node:20-slim`（glibc），不能用 alpine**：该包只发布 glibc 绑定（`linux-x64-gnu` / `linux-arm64-gnu`），且 napi-rs 模板在 arm64+musl 上有 `isMusl()` 检测 bug + 无 musl 绑定，alpine 上永远无法加载。主 Dockerfile 与 scip Dockerfile 的 base 均已切换为 `node:20-slim`。
-- 新增 `apps/graph-app` 构建阶段（Three.js 前端），由 nginx 托管到 `:18081`（`docker/nginx.conf` 新增 `listen 82` server block）。
+- backend 移除 tree-sitter 原生依赖，不再需要 node-gyp 编译链，基础镜像沿用 `node:20-slim`。
+- `apps/graph-app` 构建阶段（Three.js 前端），由 nginx 托管到 `:18081`（`docker/nginx.conf` 新增 `listen 82` server block）。
 - 构建阶段联网走构建代理：`docker-compose.yml` 里 `http_proxy`/`https_proxy`/`all_proxy` 作 build-arg 注入。
 
 ### 7.3 新增文件
@@ -191,7 +182,7 @@ services:
 
 ## 8. 注意点
 
-1. **scip 语言覆盖有限**（约 9 种，且部分需项目依赖）；tree-sitter 覆盖全，导入层按语言降级（scip 无 indexer 时只建语法树子图）。
+1. **scip 语言覆盖有限**（约 9 种，且部分需项目依赖）；无对应 indexer 的语言，`import_to_graph` 捕获读索引失败并跳过符号图。
 2. **SCIP protobuf 解析**：走网关 `scip print --json` 转换最省事（官方 TS 绑定有 google-protobuf 兼容坑，避坑）。
 3. **neo4j 密码**：用 `NEO4J_PASSWORD` 环境变量注入，不写死在代码/镜像里。
 4. **挂载一致性**：scip 容器与 mcp 容器必须挂载同一批项目、同一路径（都同路径挂载），且 `CODE_PROJECTS` / `SCIP_PROJECTS` 一致，否则 index.scip 里的相对路径对不上。
@@ -199,9 +190,9 @@ services:
 ## 9. 实现状态
 
 - [x] `docker/scip/` 网关（HTTP job 服务 + scip/indexers）
-- [x] backend 新工具：`generate_scip_index` / `generate_syntax_tree` / `import_to_graph` / `query_graph`
+- [x] backend 新工具：`generate_scip_index` / `import_to_graph` / `query_graph`
 - [x] `apps/graph-app/` Three.js 3D 渲染页（:18081）
 - [x] docker-compose 扩 3 services + `scripts/deploy-graph.sh`
 - [x] Neo4j 图模型 + UNWIND 批量导入脚本（`neo4j.service.ts` 建普通索引，Community 兼容）
 
-已通过端到端验证：AST 解析 24 文件 / 8889 语法节点导入真实 Neo4j；scip-typescript 生成 index.scip 并经 `scip print --json` 导入 5 个 Symbol + 4 条 REFERENCES；`query_graph` 对路径/关系/节点三种 cypher 返回均能抽出节点与边生成视图快照。
+已通过端到端验证：scip-typescript 生成 index.scip 并经 `scip print --json` 导入 5 个 Symbol + 4 条 REFERENCES；`query_graph` 对路径/关系/节点三种 cypher 返回均能抽出节点与边生成视图快照。

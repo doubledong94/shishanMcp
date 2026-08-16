@@ -52,7 +52,6 @@ const COLOR_BY_KIND = {
   Symbol: 0x238636,
   File: 0x58a6ff,
   Project: 0xe3b341,
-  SyntaxNode: 0x8957e5,
   Result: 0xff7b72,
 };
 

@@ -11,7 +11,7 @@ LLM 客户端 ──► MCP Streamable HTTP(/)
              ├─ src/tools/index.ts        ← 自动扫描加载 *.tool.ts（不需要你维护）
              ├─ src/tools/xxx.tool.ts     ← 你新增的 MCP 工具（一个文件搞定）
              ├─ src/tools/registry.ts     ← 自注册表（工具文件 registerTool 进去）
-             └─ src/core/*.service.ts     ← 具体实现（tree-sitter、scip、Neo4j 等）
+             └─ src/core/*.service.ts     ← 具体实现（scip、Neo4j 等）
 ```
 
 一个工具 = **一个 `ToolSpec`（定义 AI 看到的 name/description/parameters）+ 一个 `@Tool()` 方法 + 一行 `registerTool()`**。
@@ -74,7 +74,7 @@ cd ../.. && ./scripts/deploy-graph.sh --password <密码> <你的挂载项目>  
 | 文件必须导出 `ToolSpec` 常量 | 装饰器和"可用工具"展示共用，**单一来源**，保证展示 = AI 收到的内容 |
 | 文件末尾必须 `registerTool({ cls, spec })` | 否则工具不上线，也不会出现在"可用工具" |
 | 简单逻辑直接内联 | 不需要额外 service |
-| 复用逻辑抽到 `core/` 下的 service | 工具类构造器直接注入，例如 `GraphService`、`TreeSitterService` |
+| 复用逻辑抽到 `core/` 下的 service | 工具类构造器直接注入，例如 `GraphService` |
 | 每个工具要 `calls.track(...)` | 否则 18080 调试控制台看不到调用记录 |
 | 参数用 zod | `parameters` 用 `z.object({...})`，每个字段 `.describe()`，AI 靠这些描述决定怎么调用 |
 

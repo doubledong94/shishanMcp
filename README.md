@@ -1,6 +1,6 @@
 # shishan MCP
 
-一个**代码图谱 MCP server**：部署在 Docker 里，给 AI 提供**代码图谱**能力（SCIP 精确符号图 + tree-sitter 语法树 → Neo4j 图数据库），AI 用 cypher 查询依赖路径并渲染到 3D 页面。支持在容器里同时挂载多个宿主机项目（只读）。
+一个**代码图谱 MCP server**：部署在 Docker 里，给 AI 提供**代码图谱**能力（SCIP 精确符号图 → Neo4j 图数据库），AI 用 cypher 查询依赖路径并渲染到 3D 页面。支持在容器里同时挂载多个宿主机项目（只读）。
 
 - **MCP 端点**：`http://localhost:13000/`（Streamable HTTP，LLM 客户端连这里）
 - **调试控制台**：`http://localhost:18080`（工具清单 + 调用日志）
@@ -14,7 +14,7 @@
 ```
 
 装好后把 `http://localhost:13000/` 配给你的 AI 客户端（见"让你的 AI 客户端连上它"），
-然后 AI 就能 `generate_syntax_tree` / `generate_scip_index` 建索引、`query_graph` 查依赖图了。
+然后 AI 就能 `generate_scip_index` 建索引、`import_to_graph` 导入、`query_graph` 查询依赖图了。
 
 ---
 
@@ -52,7 +52,7 @@
 - MCP / 控制台 / 图谱页：13000 / 18080 / **18081**
 - Neo4j Browser：`http://localhost:7474`（neo4j / 你设的密码）
 
-**同路径挂载**意味着容器内路径和宿主机完全一致，scip / tree-sitter 直接按宿主机绝对路径读取项目文件，无需任何路径映射。
+**同路径挂载**意味着容器内路径和宿主机完全一致，scip 直接按宿主机绝对路径读取项目文件，无需任何路径映射。
 
 数据目录默认是 `~/.shishan-data`（与用户名/项目路径无关，所有用户通用），也可以用 `--data` 指定；图数据库数据持久化在 `$DATA_DIR/neo4j`，容器回收不丢。容器名前缀默认 `shishan`，用 `--name <前缀>` 修改：
 
@@ -158,23 +158,21 @@ claude mcp add --transport http shishan http://127.0.0.1:13000
 
 ## 代码图谱（可选）
 
-部署时带上 Neo4j 密码（见上"2A. 部署"）后，AI 会额外看到 4 个图谱工具：
+部署时带上 Neo4j 密码（见上"2A. 部署"）后，AI 会额外看到 3 个图谱工具：
 
 - `generate_scip_index(project, language)`：调 scip 索引网关生成精确符号索引
-- `generate_syntax_tree(project, language?)`：用 tree-sitter（306 语言）生成语法树
-- `import_to_graph(project)`：合并 SCIP 索引 + 语法树写入 Neo4j 图数据库
+- `import_to_graph(project)`：把 index.scip 符号图写入 Neo4j 图数据库
 - `query_graph(project, cypher)`：对 Neo4j 执行 cypher，把结果渲染到 :18081 三维图页面
 
 典型工作流（Agent 自主编排）：
 
 ```
-generate_scip_index("proj-a", "typescript")  → generate_syntax_tree("proj-a")
-  → import_to_graph("proj-a")
+generate_scip_index("proj-a", "typescript") → import_to_graph("proj-a")
   → query_graph("proj-a", "MATCH p=(a:Symbol)-[:REFERENCES*1..5]->(b:Symbol) RETURN p")
 ```
 
 - 数据持久化在宿主机 `$DATA_DIR/neo4j`（bind mount），重建/回收容器不丢。
-- scip 按语言装 indexer：TS/JS、Python、Java/Scala/Kotlin（需 Gradle/Maven 项目）、C/C++（需 `compile_commands.json`）。没有对应 indexer 的语言，导入时自动降级为只建语法树子图。
+- scip 按语言装 indexer：TS/JS、Python、Java/Scala/Kotlin（需 Gradle/Maven 项目）、C/C++（需 `compile_commands.json`）。没有对应 indexer 的语言，符号图为空。
 - 没有 Neo4j 密码时，图谱工具会返回清晰报错。
 
 ## 验证安装
