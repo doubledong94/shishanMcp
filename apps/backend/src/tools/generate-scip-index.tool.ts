@@ -10,8 +10,9 @@ import { mountedProjectList, mountedProjectsHint } from "./mounted-projects";
 export const GenerateScipIndexToolSpec: ToolSpec = {
   name: "generate_scip_index",
   description:
-    "对某个已挂载的项目调用 scip 索引服务（独立 docker 网关）生成 index.scip（精确符号图）。" +
-    "生成结果落盘到数据目录，之后可用 import_to_graph 导入图数据库。" +
+    "对某个已挂载的项目调用 scip 索引服务生成 index.scip（精确符号图）。" +
+    "若用 --scip-java fork 部署，索引完成后会直接写入 Neo4j 图数据库（索引即入库），" +
+    "返回中带 graph 统计，无需再调 import_to_graph。" +
     "当前已挂载项目：" + mountedProjectList(),
   parameters: z.object({
     project: z

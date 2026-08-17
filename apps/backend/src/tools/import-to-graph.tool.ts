@@ -10,9 +10,10 @@ import { mountedProjectList, mountedProjectsHint } from "./mounted-projects";
 export const ImportToGraphToolSpec: ToolSpec = {
   name: "import_to_graph",
   description:
-    "读取某项目已生成的 index.scip（SCIP 符号图），写入 Neo4j 图数据库。" +
-    "需要先调用 generate_scip_index。写入参数化 cypher，防注入。" +
-    "当前已挂载项目：" + mountedProjectList(),
+    "确保某项目的符号图已写入 Neo4j 图数据库。" +
+    "若 scip-java fork 已直写入库（用 --scip-java 部署时 generate_scip_index 通常已完成），直接返回统计；" +
+    "否则回退到从已生成的 index.scip 导入。" +
+    "需要先调用 generate_scip_index。当前已挂载项目：" + mountedProjectList(),
   parameters: z.object({
     project: z
       .string()

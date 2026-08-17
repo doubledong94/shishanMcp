@@ -13,6 +13,7 @@ export interface GenerateResult {
   status: string;
   message: string;
   indexPath?: string;
+  graph?: Record<string, number>;
 }
 
 export interface ImportResult {
@@ -22,6 +23,7 @@ export interface ImportResult {
   references: number;
   statements: number;
   message: string;
+  graph?: Record<string, number>;
 }
 
 export interface GraphNode {
@@ -80,12 +82,24 @@ export class GraphService {
     if (job.status === "failed") {
       throw new Error(`scip 索引失败：${job.error || "未知错误"}`);
     }
+    // scip-java fork 聚合期会直写 Neo4j；这里回查统计，让 AI 拿到"索引即入库"的结果。
+    let graph: Record<string, number> | undefined;
+    try {
+      graph = await this.neo4j.countProject(project);
+    } catch {
+      graph = undefined;
+    }
+    const graphNote =
+      graph && Object.values(graph).some((n) => n > 0)
+        ? ` 已直写入库：${formatCounts(graph)}`
+        : " 未检测到图数据（若未用 --scip-java fork，需再调 import_to_graph）";
     return {
       project,
       jobId,
       status: job.status,
-      message: `已生成 index.scip（项目 ${project}）`,
+      message: `已生成 index.scip（项目 ${project}）。${graphNote}`,
       indexPath: job.indexPath,
+      graph,
     };
   }
 
@@ -94,6 +108,24 @@ export class GraphService {
   async importGraph(project: string): Promise<ImportResult> {
     this.assertProject(project);
     await this.neo4j.ensureSchema();
+
+    // fork 直写已入库：直接返回统计，避免重复导入。
+    try {
+      const existing = await this.neo4j.countProject(project);
+      if (existing && Object.values(existing).some((n) => n > 0)) {
+        return {
+          project,
+          files: 0,
+          symbols: 0,
+          references: 0,
+          statements: 0,
+          message: `项目 ${project} 已由 scip-java fork 直写入库，无需再导入。${formatCounts(existing)}`,
+          graph: existing,
+        };
+      }
+    } catch {
+      /* 连接失败走旧导入路径，让旧逻辑给出更清晰的报错 */
+    }
 
     let scipIndex: ScipIndexJson | null = null;
     try {
@@ -118,9 +150,13 @@ export class GraphService {
 
   // ---------- 工具 2：查询并渲染 ----------
 
-  async queryGraph(project: string, cypher: string): Promise<QueryResult> {
+  async queryGraph(
+    project: string,
+    cypher: string,
+    params: Record<string, unknown> = {},
+  ): Promise<QueryResult> {
     this.assertProject(project);
-    const records = await this.neo4j.run(cypher, {}, "read");
+    const records = await this.neo4j.run(cypher, params, "read");
     const view = extractGraphView(cypher, records);
     const viewId = this.saveView(project, view, cypher);
     return {
@@ -197,6 +233,13 @@ export class GraphService {
 
 function viewPath(dataRoot: string, project: string, viewId: string): string {
   return path.join(dataRoot, "projects", project, `${viewId}.json`);
+}
+
+function formatCounts(graph: Record<string, number>): string {
+  return Object.entries(graph)
+    .filter(([, n]) => n > 0)
+    .map(([label, n]) => `${label}=${n}`)
+    .join(" ");
 }
 
 // ---------- 导入语句构造 ----------

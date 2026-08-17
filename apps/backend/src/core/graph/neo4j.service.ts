@@ -63,6 +63,25 @@ export class Neo4jService {
     }
   }
 
+  /** 统计某项目在图数据库中的节点数（按标签）。 */
+  async countProject(project: string): Promise<Record<string, number>> {
+    const labels = ["Class", "Method", "Field", "Value", "CalledMethod", "Condition"];
+    const counts: Record<string, number> = {};
+    const session = this.session("read");
+    try {
+      for (const label of labels) {
+        const result = await session.run(
+          `MATCH (n:\`${label}\` {projectId: $project}) RETURN count(n) AS c`,
+          { project },
+        );
+        counts[label] = neo4j.integer.toNumber(result.records[0].get("c"));
+      }
+    } finally {
+      await session.close();
+    }
+    return counts;
+  }
+
   /** 一次事务内批量执行多条 cypher（用于导入）。 */
   async runAll<T>(statements: Array<{ query: string; params: Record<string, unknown> }>): Promise<void> {
     if (statements.length === 0) return;
