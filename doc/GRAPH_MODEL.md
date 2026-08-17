@@ -220,8 +220,8 @@ RETURN cm, v1, v2
 - [x] 独立测试脚本（`scip-java/scripts/e2e-graph-test.sh`：一次性 Neo4j + 断言）
 - [x] shishanMcp：compose 给 scip 容器注入 NEO4J_* 环境变量
 - [x] shishanMcp：`generate_scip_index` 返回写入统计（graph 字段）；`import_to_graph` 改为兼容守卫（fork 已入库则直接返回统计，否则回退旧导入）；`query_graph` 新增 preset 预置模板
-- [ ] fork：FLOWS 数据流、CONTROLS、REF 边（图模型 §3 其余关系）
-- [ ] fork：else-if（ELSE 边）精确建模
+- [x] fork：运行时值节点（每次出现一个，读写区分）+ FLOWS（赋值/末写/传参/返回）+ CONTROLS + REF + ELSE + CalledReturn
+- [ ] fork：跨方法传参绑定（calledParam→callee 形参）、跨方法返回值绑定（callee return→calledReturn）
 - [ ] 全量验证：`deploy-graph.sh --scip-java <fork> okhttp` 端到端
 
 > 说明：`import_to_graph` 与 `/api/index/:project` 未彻底删除，而是作为非 fork 部署的回退路径保留（用 `--scip-java` fork 时其自动短路为只读统计）。

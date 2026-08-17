@@ -14,20 +14,30 @@ const PRESETS: Record<string, { description: string; cypher: string }> = {
     cypher:
       "MATCH (m:Method {projectId:$project})-[:ROOT]->(:Condition)-[:SUB*0..]->(c:Condition)-[:LEADS_TO]->(cm:CalledMethod)-[:CALLS]->(callee:Method) RETURN m, c, cm, callee LIMIT 500",
   },
+  callers: {
+    description: "被调方法的所有调用方（谁调用了我）",
+    cypher:
+      "MATCH (m:Method {projectId:$project})-[:ROOT]->(rc:Condition)<-[:SCOPED_BY]-(cm:CalledMethod)-[:CALLS]->(callee:Method) RETURN DISTINCT m, cm, callee LIMIT 500",
+  },
   branches: {
     description: "所有分支及其通往的调用（逻辑控制）",
     cypher:
       "MATCH (c:Condition {projectId:$project})-[:LEADS_TO]->(cm:CalledMethod)-[:CALLS]->(m:Method) RETURN c, cm, m LIMIT 500",
   },
   nesting: {
-    description: "类嵌套：实例引用→调用点（REF 边，待数据流落地后生效）",
+    description: "类嵌套：实例引用→调用点",
     cypher:
       "MATCH (v:Value {projectId:$project})-[:REF]->(cm:CalledMethod)-[:CALLS]->(m:Method) RETURN v, cm, m LIMIT 500",
   },
   dataflow: {
-    description: "数据流：值→值（赋值/传参/返回值，FLOWS 边待落地后生效）",
+    description: "数据流：值→值（赋值/末写/传参/返回值）",
     cypher:
       "MATCH (a:Value {projectId:$project})-[:FLOWS*1..6]->(b:Value) RETURN a, b LIMIT 500",
+  },
+  controls: {
+    description: "条件控制：哪些值守卫了哪些分支",
+    cypher:
+      "MATCH (v:Value {projectId:$project})-[:CONTROLS]->(c:Condition)-[:LEADS_TO]->(cm:CalledMethod) RETURN v, c, cm LIMIT 500",
   },
   types: {
     description: "类继承关系（EXTENDS）",
@@ -51,7 +61,7 @@ export const QueryGraphToolSpec: ToolSpec = {
         "项目名（同路径挂载项目（绝对路径）的目录名）。" + mountedProjectsHint(),
       ),
     preset: z
-      .enum(["calls", "branches", "nesting", "dataflow", "types"])
+      .enum(["calls", "callers", "branches", "nesting", "dataflow", "controls", "types"])
       .optional()
       .describe("预置 cypher 模板名。给了 preset 时忽略 cypher"),
     cypher: z
