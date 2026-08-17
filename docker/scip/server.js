@@ -183,7 +183,7 @@ function json(res, code, obj) {
  *  <工作目录>/../build.log（即 <DATA_ROOT>/<project>/build.log，同路径挂载，
  *  宿主机可直接 tail -f 流式查看编译进度）。
  */
-function runSteps(steps, cwd) {
+function runSteps(steps, cwd, project) {
   return new Promise((resolve, reject) => {
     let i = 0;
     const logs = [];
@@ -193,10 +193,11 @@ function runSteps(steps, cwd) {
       if (i >= steps.length) return resolve(logs.join("\n"));
       const { cmd, args } = steps[i++];
       // scip-java 聚合阶段要读回全部 .tree 语法树（okhttp 有数百 MB），默认 JVM 堆（容器内存 25%）
-      // 不够，索引大项目给足堆。
+      // 不够，索引大项目给足堆。SCIP_PROJECT_NAME 让 fork 直写 Neo4j 时用项目名而不是
+      // 工作目录名（<DATA_ROOT>/<project>/work 的 basename 是 "work"）。
       const env =
         cmd === "scip-java"
-          ? { ...process.env, SCIP_JAVA_OPTS: "-Xmx6g" }
+          ? { ...process.env, SCIP_JAVA_OPTS: "-Xmx6g", SCIP_PROJECT_NAME: project }
           : process.env;
       const proc = spawn(cmd, args, { cwd, shell: false, env });
       let out = "";
@@ -275,7 +276,7 @@ async function dispatch(project, language, jobId) {
     if (!hasBin) {
       throw new Error(`indexer 未安装：${first}（镜像里没有，需要在 docker/scip/Dockerfile 补装）`);
     }
-    const log = await runSteps(steps, workDir);
+    const log = await runSteps(steps, workDir, project);
     // 产物默认写在 cwd（工作目录），移到索引目录
     const produced = findScipFile(workDir);
     if (!produced) throw new Error(`indexer 未生成 index.scip\n${log}`);
