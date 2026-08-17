@@ -78,7 +78,10 @@ services:
     container_name: shishan-neo4j
     environment:
       - NEO4J_AUTH=neo4j/${NEO4J_PASSWORD:?设置 NEO4J_PASSWORD}
-      - NEO4J_server_memory_heap_max__size=1G
+      - NEO4J_server_memory_heap_max__size=3G
+      # 大批量图写入（fork 直写时 FLOWS 边可达数十万）默认事务内存上限不够，显式放宽
+      - NEO4J_dbms_memory_transaction_total_max=2G
+      - NEO4J_db_memory_transaction_max=1G
       # Neo4j 默认要求密码 >=8 位，允许自定义短密码（如本地测试用 6 位）
       - NEO4J_dbms_security_auth__minimum__password__length=4
     volumes:
