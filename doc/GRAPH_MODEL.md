@@ -213,9 +213,15 @@ RETURN cm, v1, v2
 
 ## 8. 待办
 
-- [ ] scip-java fork：聚合期接入 neo4j-java-driver 直写（批处理 / MERGE / 幂等）
-- [ ] scip-java fork：环境变量注入连接信息
-- [ ] 独立测试脚本
-- [ ] shishanMcp：compose 给 scip 容器注入 NEO4J_* 环境变量
-- [ ] shishanMcp：废弃 `/api/index/:project`、`import_to_graph`；`generate_scip_index` 改返回写入统计
-- [ ] `query_graph` 预置 cypher 模板（第 6 节草案细化）
+实现状态：
+
+- [x] scip-java fork：聚合期接入 neo4j-java-driver 直写（批处理 / MERGE / 幂等）
+- [x] scip-java fork：环境变量注入连接信息（NEO4J_URI/USER/PASSWORD/DATABASE）
+- [x] 独立测试脚本（`scip-java/scripts/e2e-graph-test.sh`：一次性 Neo4j + 断言）
+- [x] shishanMcp：compose 给 scip 容器注入 NEO4J_* 环境变量
+- [x] shishanMcp：`generate_scip_index` 返回写入统计（graph 字段）；`import_to_graph` 改为兼容守卫（fork 已入库则直接返回统计，否则回退旧导入）；`query_graph` 新增 preset 预置模板
+- [ ] fork：FLOWS 数据流、CONTROLS、REF 边（图模型 §3 其余关系）
+- [ ] fork：else-if（ELSE 边）精确建模
+- [ ] 全量验证：`deploy-graph.sh --scip-java <fork> okhttp` 端到端
+
+> 说明：`import_to_graph` 与 `/api/index/:project` 未彻底删除，而是作为非 fork 部署的回退路径保留（用 `--scip-java` fork 时其自动短路为只读统计）。
