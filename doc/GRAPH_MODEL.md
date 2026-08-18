@@ -99,6 +99,7 @@ NEO4J_DATABASE  # 可选
 | `(:Value)-[:FLOWS]->(:Value)` | 数据流（赋值/读写/传参/返回值） | `flow(Mk, S, D)` |
 | `(:Value)-[:CONTROLS]->(:Condition)` | 条件变量守卫哪个分支 | `toConditionValue→conditionItem` |
 | `(:Value)-[:REF]->(:CalledMethod)` | 嵌套方向：实例引用访问成员 | Reference |
+| `(:Value|:CalledMethod|:Condition)-[:NEXT]->(...)` | 执行顺序：块内语句先后（第 5 方向） | `codeOrder(Mk, S, D)` |
 
 ### 3.3 属性
 

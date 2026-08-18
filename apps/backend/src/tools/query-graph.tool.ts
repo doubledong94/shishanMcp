@@ -84,6 +84,12 @@ const PRESETS: Record<string, { description: string; needsParam: boolean; cypher
     cypher:
       "MATCH (v1:Value {projectId:$project})-[:FLOWS]->(cp:Value {projectId:$project,kind:'CALLED_PARAM'})-[:ARG_OF]->(cm:CalledMethod)-[:CALLS]->(m:Method) MATCH (v2:Value {projectId:$project})-[:REF]->(cm) RETURN v1, cp, cm, m, v2 LIMIT 500",
   },
+  codeorder: {
+    description: "执行顺序：块内语句的先后（NEXT 链，第 5 方向）",
+    needsParam: false,
+    cypher:
+      "MATCH p=(a {projectId:$project})-[:NEXT*1..8]->(b {projectId:$project}) RETURN p LIMIT 50",
+  },
 };
 
 const PRESET_NAMES = Object.keys(PRESETS) as [string, ...string[]];

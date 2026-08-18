@@ -170,8 +170,8 @@ MATCH (:Method{name:$m})-[:CALLS]<-[:CALLS]-(:CalledMethod)-[:ARG_OF]<-
 | 逻辑控制 | ✅ `controls` preset |
 | 类嵌套（REF/INDEX） | ✅ `nesting` preset + `INDEX` 边 |
 | 相交搜索 | ✅ 双 MATCH 汇聚调用点 |
-| 类范围（super/sub/inPackage） | ⚠️ 需补充 preset（继承已由 EXTENDS 表达） |
-| ~~类范围 usedBy(C)~~ | ❌ 已决定不实现 |
-| 多态 override 搜索 | ⚠️ 需 `OVERRIDES` 专项 preset |
+| 类范围（super/sub/inPackage） | ✅ `ancestors`/`descendants`/`inPackage` preset（需 param） |
+| 多态 override 搜索 | ✅ `polymorphism` preset（OVERRIDES） |
+| 执行顺序（第 5 方向） | ✅ `codeorder` preset（NEXT 边，旧项目亦未实现的补全） |
 | 排除（exclude*） | ⚠️ 可作为查询参数 |
 | 正则 FA 引擎 | ❌ 不移植（cypher 原生支持路径模式） |
