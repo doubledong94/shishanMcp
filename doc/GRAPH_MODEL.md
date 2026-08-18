@@ -225,6 +225,6 @@ RETURN cm, v1, v2
 - [x] fork：写穿引用（reversedRef：`obj.field = x` 写目标为字段、基对象记已写）+ 字段访问 REF 边（类嵌套方向）
 - [x] fork：跨方法传参绑定（calledParam→callee 形参，按声明序）、跨方法返回值绑定（callee return→calledReturn）
 - [x] fork：数组访问 INDEX 边（`arr[i]`）；引用方向细化（markUnreadReturn：写目标 REF 翻转 member→base）
-- [ ] 全量验证：`deploy-graph.sh --scip-java <fork> okhttp` 端到端
+- [x] 全量验证：`deploy-graph.sh --scip-java <fork> okhttp` 端到端（网关 → fork → Neo4j 直写 → backend 工具可用）
 
 > 说明：`import_to_graph` 与 `/api/index/:project` 未彻底删除，而是作为非 fork 部署的回退路径保留（用 `--scip-java` fork 时其自动短路为只读统计）。
