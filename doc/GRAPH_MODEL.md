@@ -80,7 +80,7 @@ NEO4J_DATABASE  # 可选
 | `(:Method)-[:RETURNS]->(:Value)` | 方法返回值 | `return(M, R)` |
 | `(:Class)-[:EXTENDS|IMPLEMENTS]->(:Class)` | 继承/实现 | `subType(T, S)` |
 | `(:Method)-[:OVERRIDES]->(:Method)` | 覆写 | `override(K, S)` |
-| `(:Method)-[:USES]->(:Method|:Field)` | 方法使用了谁（类范围 usedBy 搜索用） | `methodUseMethod / methodUseField` |
+| ~~`(:Method)-[:USES]->(:Method|:Field)`~~ | ~~方法使用了谁（类范围 usedBy 搜索用）~~ | ~~`methodUseMethod / methodUseField`~~（已决定不实现） |
 | `(:Value)-[:TYPED_BY]->(:Class)` | 成员类型（可选，支撑类型遍历） | `instanceOf(K, T)` |
 
 **运行时层关系：**

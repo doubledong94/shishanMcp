@@ -73,9 +73,9 @@
 | `CalledMethod` | `nodeCalledMethodOf(Method, CM)` | 方法内的调用点 | `MATCH (:Method{...})-[:ROOT]->(:Condition)<-[:SCOPED_BY]-(:CalledMethod)` |
 | `CalledParam` | `nodeCalledParameterOf(Param, CP)` | 实参槽 | `MATCH (:Value{kind:'CALLED_PARAM'})-[:ARG_OF]->(:CalledMethod)` |
 | `CalledReturn` | `nodeCalledReturnOf(Return, CR)` | 返回使用槽 | `MATCH (:Value{kind:'CALLED_RETURN'})` |
-| `MethodUse` | `nodeMethodUse(Method, MethodUse)` | 方法调用了谁 | `(:Method)-[:USES]->(:Method)`（或经 CalledMethod-CALLS 推导） |
-| `FieldUse` | `nodeFieldUsedBy(Method, FieldUsedBy)` | 方法用了哪些字段 | `(:Method)-[:USES]->(:Field)`（或经 REF/FLOWS 推导） |
-| `MethodUsedBy` | `nodeMethodUsedBy(Method, MethodUsedBy)` | 谁调用了此方法 | `(:Method)<-[:CALLS]-(:CalledMethod)<-[:SCOPED_BY]-...` 或 `USES` 反向 |
+| `MethodUse` | `nodeMethodUse(Method, MethodUse)` | 方法调用了谁 | 经 `CalledMethod-[:CALLS]->(:Method)` 推导 |
+| `FieldUse` | `nodeFieldUsedBy(Method, FieldUsedBy)` | 方法用了哪些字段 | 经 `REF`/`FLOWS` 推导 |
+| `MethodUsedBy` | `nodeMethodUsedBy(Method, MethodUsedBy)` | 谁调用了此方法 | `(:Method)<-[:CALLS]-(:CalledMethod)<-[:SCOPED_BY]-...` |
 | `SuperOf/SubOf` | `nodeSuperOf/SubOf(Super, Sub)` | 父子类 | `(:Class)-[:EXTENDS]->(:Class)`（含 `IMPLEMENTS`） |
 | `Union/Intersection/Difference` | `nodeUnion/Intersection/Difference(N1,N2,N)` | 节点集合运算 | cypher `UNION` / 双 MATCH 交集 / `WHERE NOT` |
 
@@ -101,7 +101,7 @@
 | `inPackage(P)` | — | `MATCH (c:Class{projectId:$project}) WHERE c.package STARTS WITH $p` |
 | `super(C)` | `classScopeSuper(C, Super)` | `MATCH (c:Class{name:$c})-[:EXTENDS*1..]->(s:Class) RETURN s` |
 | `sub(C)` | `classScopeSub(C, Sub)` | `MATCH (c:Class{name:$c})<-[:EXTENDS*1..]-(s:Class) RETURN s` |
-| `usedBy(C)` | `methodUseMethod/Field` 推导 | `MATCH (:Class{name:$c})-[:DECLARES]->(:Method)-[:USES]->(x)`（x 的所属类） |
+| `usedBy(C)` | ~~`methodUseMethod/Field` 推导~~ | ❌ 已决定不实现（不建 `USES` 边） |
 | `union/intersection/difference` | `classScopeUnion/Intersection/Difference` | 两个集合 cypher 组合（UNION / 交集 / NOT IN） |
 | `var(A)` | `var(T)` | 前一个已定义类范围的复用 |
 
@@ -146,7 +146,7 @@ MATCH (:Method{name:$m})-[:CALLS]<-[:CALLS]-(:CalledMethod)-[:ARG_OF]<-
 | 谓词 | 语义 | 新项目 |
 | --- | --- | --- |
 | `loopMoreThanOnce(L, E)` | 元素在循环中多次出现 | cypher `count` 聚合 + `HAVING count>1` |
-| `classThatUseMethodAndField(MF, Class)` | 同时使用某方法+字段的类 | 两个 `USES` 条件的类交集 |
+| ~~`classThatUseMethodAndField(MF, Class)`~~ | ~~同时使用某方法+字段的类~~ | ❌ 依赖 `USES`，随 usedBy 一并放弃 |
 | `calledKey/stepKey/overrideKey` | 声明键 ↔ 调用/步进键映射 | 已由运行时节点（CalledMethod 等）直接承载，无需映射 |
 | `loadStepInRuntime` / `loadRuntime` / `loadAddressable` | 按需加载 | Neo4j 全图在库，无需加载 |
 | `instanceOf` | 成员的类型 | `Field.type` / `TYPED_BY` 边 |
@@ -170,7 +170,8 @@ MATCH (:Method{name:$m})-[:CALLS]<-[:CALLS]-(:CalledMethod)-[:ARG_OF]<-
 | 逻辑控制 | ✅ `controls` preset |
 | 类嵌套（REF/INDEX） | ✅ `nesting` preset + `INDEX` 边 |
 | 相交搜索 | ✅ 双 MATCH 汇聚调用点 |
-| 类范围（super/sub/usedBy/inPackage） | ⚠️ 需补充 preset（继承已由 EXTENDS 表达，usedBy 待 `USES` 边补全） |
+| 类范围（super/sub/inPackage） | ⚠️ 需补充 preset（继承已由 EXTENDS 表达） |
+| ~~类范围 usedBy(C)~~ | ❌ 已决定不实现 |
 | 多态 override 搜索 | ⚠️ 需 `OVERRIDES` 专项 preset |
 | 排除（exclude*） | ⚠️ 可作为查询参数 |
 | 正则 FA 引擎 | ❌ 不移植（cypher 原生支持路径模式） |
