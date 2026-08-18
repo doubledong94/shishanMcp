@@ -223,7 +223,8 @@ RETURN cm, v1, v2
 - [x] fork：运行时值节点（每次出现一个，读写区分）+ FLOWS（赋值/末写/传参/返回）+ CONTROLS + REF + ELSE + CalledReturn
 - [x] fork：分支感知数据流（分支作用域复制父态 / 并集合并 / 嵌套 / 循环反馈 / return 分支不合并 / 确定性赋值清空预写 / 反馈 happenLaterThan / 循环携带依赖 outer-only 读进反馈 / unwrittenReads 向上传播）
 - [x] fork：写穿引用（reversedRef：`obj.field = x` 写目标为字段、基对象记已写）+ 字段访问 REF 边（类嵌套方向）
-- [ ] fork：跨方法传参绑定（calledParam→callee 形参）、跨方法返回值绑定（callee return→calledReturn）
+- [x] fork：跨方法传参绑定（calledParam→callee 形参，按声明序）、跨方法返回值绑定（callee return→calledReturn）
+- [x] fork：数组访问 INDEX 边（`arr[i]`）；引用方向细化（markUnreadReturn：写目标 REF 翻转 member→base）
 - [ ] 全量验证：`deploy-graph.sh --scip-java <fork> okhttp` 端到端
 
 > 说明：`import_to_graph` 与 `/api/index/:project` 未彻底删除，而是作为非 fork 部署的回退路径保留（用 `--scip-java` fork 时其自动短路为只读统计）。
