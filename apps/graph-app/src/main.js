@@ -7,8 +7,16 @@ const viewSel = document.getElementById("view");
 const loadBtn = document.getElementById("view-btn");
 const statsEl = document.getElementById("stats");
 const errorEl = document.getElementById("error");
+const selEl = document.getElementById("sel");
+const dirSel = document.getElementById("dir");
+const expandBtn = document.getElementById("expand-btn");
+const resetBtn = document.getElementById("reset-btn");
 
 let scene, camera, renderer, controls, graphGroup;
+let nodeMeshes = new Map(); // node id -> THREE.Mesh
+let nodesById = new Map(); // node id -> node
+let selectedId = null;
+let state = { nodes: [], edges: [] };
 
 function initThree() {
   scene = new THREE.Scene();
@@ -32,6 +40,17 @@ function initThree() {
 
   graphGroup = new THREE.Group();
   scene.add(graphGroup);
+
+  const raycaster = new THREE.Raycaster();
+  const pointer = new THREE.Vector2();
+  renderer.domElement.addEventListener("pointerdown", (e) => {
+    pointer.x = (e.clientX / window.innerWidth) * 2 - 1;
+    pointer.y = -(e.clientY / window.innerHeight) * 2 + 1;
+    raycaster.setFromCamera(pointer, camera);
+    const hits = raycaster.intersectObjects(graphGroup.children, false);
+    const hit = hits.find((h) => h.object.userData && h.object.userData.nodeId);
+    selectNode(hit ? hit.object.userData.nodeId : null);
+  });
 
   window.addEventListener("resize", () => {
     camera.aspect = window.innerWidth / window.innerHeight;
@@ -97,12 +116,14 @@ function layout(nodes, edges) {
 }
 
 function renderGraph(data) {
+  state = data;
   while (graphGroup.children.length) graphGroup.remove(graphGroup.children[0]);
   const nodes = data.nodes || [];
   const edges = data.edges || [];
+  nodeMeshes.clear();
+  nodesById.clear();
 
   const pos = layout(nodes, edges);
-  const nodeMesh = new Map();
 
   for (const n of nodes) {
     const v = pos.get(n.id) ?? new THREE.Vector3();
@@ -112,8 +133,10 @@ function renderGraph(data) {
     const mat = new THREE.MeshStandardMaterial({ color, emissive: color, emissiveIntensity: 0.25 });
     const mesh = new THREE.Mesh(geo, mat);
     mesh.position.copy(v);
+    mesh.userData.nodeId = n.id;
     graphGroup.add(mesh);
-    nodeMesh.set(n.id, mesh);
+    nodeMeshes.set(n.id, mesh);
+    nodesById.set(n.id, n);
 
     // 标签
     const label = makeLabel(n.label, color);
@@ -122,14 +145,13 @@ function renderGraph(data) {
   }
 
   for (const e of edges) {
-    const a = nodeMesh.get(e.from);
-    const b = nodeMesh.get(e.to);
+    const a = nodeMeshes.get(e.from);
+    const b = nodeMeshes.get(e.to);
     if (!a || !b) continue;
-    const isRef = e.label === "REFERENCES";
     const mat = new THREE.LineBasicMaterial({
-      color: isRef ? 0x238636 : 0x6e7681,
+      color: 0x6e7681,
       transparent: true,
-      opacity: isRef ? 0.9 : 0.4,
+      opacity: 0.5,
     });
     const geo = new THREE.BufferGeometry().setFromPoints([a.position, b.position]);
     graphGroup.add(new THREE.Line(geo, mat));
@@ -150,6 +172,62 @@ function renderGraph(data) {
 
   statsEl.textContent = `${nodes.length} 节点 · ${edges.length} 边`;
   errorEl.textContent = "";
+  selectNode(selectedId);
+}
+
+function selectNode(id) {
+  selectedId = id;
+  expandBtn.disabled = !id;
+  selEl.textContent = id ? `已选中: ${(nodesById.get(id) || {}).label || id}` : "未选中节点";
+  for (const [nid, mesh] of nodeMeshes) {
+    mesh.material.emissiveIntensity = nid === id ? 1.1 : 0.25;
+  }
+}
+
+async function expand() {
+  if (!selectedId) return;
+  errorEl.textContent = "";
+  const project = projectSel.value;
+  const dir = dirSel.value;
+  const cypher =
+    `MATCH (a {id:$id})-[r:${dir}]-(b {projectId:$project}) ` +
+    "RETURN a, r, b LIMIT 200";
+  const url =
+    `/api/graph/query?project=${encodeURIComponent(project)}` +
+    `&cypher=${encodeURIComponent(cypher)}&id=${encodeURIComponent(selectedId)}`;
+  try {
+    const res = await fetch(url);
+    if (!res.ok) {
+      const body = await res.text();
+      throw new Error(`${res.status}: ${body.slice(0, 200)}`);
+    }
+    const view = await res.json();
+    mergeView(view);
+    renderGraph(state);
+  } catch (err) {
+    errorEl.textContent = `扩展失败: ${err instanceof Error ? err.message : err}`;
+  }
+}
+
+/** 把新查询到的节点/边并入当前状态（按 id 去重）。 */
+function mergeView(view) {
+  const nodes = view.nodes || [];
+  const edges = view.edges || [];
+  const seenNode = new Set(state.nodes.map((n) => n.id));
+  for (const n of nodes) {
+    if (!seenNode.has(n.id)) {
+      state.nodes.push(n);
+      seenNode.add(n.id);
+    }
+  }
+  const seenEdge = new Set(state.edges.map((e) => `${e.from}->${e.to}->${e.label}`));
+  for (const e of edges) {
+    const key = `${e.from}->${e.to}->${e.label}`;
+    if (!seenEdge.has(key)) {
+      state.edges.push(e);
+      seenEdge.add(key);
+    }
+  }
 }
 
 function makeLabel(text, color) {
@@ -235,3 +313,8 @@ loadProjects().then(() => {
 });
 projectSel.addEventListener("change", loadViews);
 loadBtn.addEventListener("click", load);
+expandBtn.addEventListener("click", expand);
+resetBtn.addEventListener("click", () => {
+  selectedId = null;
+  load();
+});

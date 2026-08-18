@@ -126,4 +126,23 @@ export class ApiController {
     }
     return view;
   }
+
+  /**
+   * 直接对 Neo4j 执行一条 cypher，返回可渲染的 {nodes, edges}（探索模式用）。
+   * 与 query_graph 相同的业务逻辑；快照照常保存（探索的每一步都可回看）。
+   */
+  @Get("graph/query")
+  async runGraphQuery(
+    @Query("project") project?: string,
+    @Query("cypher") cypher?: string,
+    @Query("id") id?: string,
+  ) {
+    if (!project || !cypher) {
+      throw new BadRequestException("需要 project 和 cypher 参数");
+    }
+    const params: Record<string, unknown> = { project };
+    if (id != null) params.id = id;
+    const result = await this.graph.queryGraph(project, cypher, params);
+    return result.view;
+  }
 }
