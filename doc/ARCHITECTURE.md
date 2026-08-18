@@ -20,7 +20,7 @@
 │  │  mcp  (shishan-mcp:local)    │   :13000 MCP / :18080 控制台│
 │  │   NestJS MCP backend          │   :18081 Three.js 图谱页  │
 │  │  + nginx                      │                          │
-│  │  工具: generate_scip_index / import_to_graph /           │
+│  │  工具: generate_scip_index / query_graph                  │
 │  │        query_graph                                       │
 │  │  挂载: <项目>:<同路径>:ro  $DATA:同路径(可写)             │
 │  └───┬──────────┬────────────┬──┘                          │
@@ -62,7 +62,7 @@ SCIP 是 protobuf 协议，且**每个语言一个 indexer**（Sourcegraph 官�
 | `GET /api/health` | ok + 已安装 indexer 列表（按 `/usr/local/bin` 实际存在性过滤） |
 
 - 代码挂载与 `mcp` 容器**完全一致**（同一批项目、同路径挂载），通过 `SCIP_PROJECTS`（冒号分隔的绝对路径列表）声明；输出写到数据目录下的 `scip/`。
-- **backend 不直接碰 index.scip 文件**：`import_to_graph` 全程走网关 `GET /api/index/:project` 拿 JSON，所以 scip 容器与 mcp 容器无需共享 scip 数据卷，各自挂载同一批项目源码即可。
+- **backend 不直接碰 index.scip 文件**：fork 聚合期直写 Neo4j；scip 容器与 mcp 容器各自挂载同一批项目源码即可。
 - **indexer 调用参数**（`server.js` 里 `indexerFor()` 按语言区分）：
   - TS/JS/TSX/JSX（`scip-typescript`）：`index --infer-tsconfig --no-global-caches`，在 cwd 产出 `index.scip`
   - Python（`scip-python`）：`index . --project-name <p>`
@@ -70,14 +70,13 @@ SCIP 是 protobuf 协议，且**每个语言一个 indexer**（Sourcegraph 官�
   - C/C++（`scip-clang`）：`--compdb-path=compile_commands.json`（项目根需有编译数据库）
   - 已知坑：`scip-python` 0.6.6 与 Python 3.9 的旧 pip 元数据不兼容（`PathDistribution` 无 `.name`），镜像里装 Python 3.11+ 可规避；`scip-clang` 没有 arm64-linux 资产，Apple Silicon 上做 `linux/arm64` 容器时 C/C++ 索引不可用。
 
-**注意**：部分 indexer 需要项目依赖（scip-typescript 通常要 `npm install`、scip-python 要 venv），覆盖语言有限（约 9 种）。scip 无对应 indexer 的语言，`import_to_graph` 捕获读索引失败并跳过符号图。
+**注意**：部分 indexer 需要项目依赖（scip-typescript 通常要 `npm install`、scip-python 要 venv），覆盖语言有限（约 9 种）。scip 无对应 indexer 的语言，符号图为空。
 
 ## 4. MCP 工具集与数据流
 
 | 工具 | 入参 | 行为 |
 | --- | --- | --- |
-| `generate_scip_index` | `project, language` | 调 scip 网关 `POST /api/jobs`，轮询完成后写 `$DATA/scip/<proj>/index.scip` |
-| `import_to_graph` | `project` | 读 index.scip（走网关 `GET /api/index/:project` 转 JSON），UNWIND 批量写入 Neo4j（签名/引用） |
+| `generate_scip_index` | `project, language` | 调 scip 网关生成索引（fork 聚合期直写 Neo4j） |
 | `query_graph` | `project, cypher` | 对 Neo4j 执行 cypher，把返回的 Path/Node/Relationship 抽成 nodes/edges，**存快照**到 `$DATA/projects/<proj>/<viewId>.json`，返回视图 URL（`http://localhost:18081/#/view/<proj>/<viewId>`） |
 
 前端渲染链路：Agent 调 `query_graph` → 后端执行 cypher → 抽取节点+边 JSON → 存快照 → Three.js 页面按 hash 路由 `#/view/<proj>/<viewId>` 加载快照渲染。
@@ -182,7 +181,7 @@ services:
 
 ## 8. 注意点
 
-1. **scip 语言覆盖有限**（约 9 种，且部分需项目依赖）；无对应 indexer 的语言，`import_to_graph` 捕获读索引失败并跳过符号图。
+1. **scip 语言覆盖有限**（约 9 种，且部分需项目依赖）；无对应 indexer 的语言，符号图为空。
 2. **SCIP protobuf 解析**：走网关 `scip print --json` 转换最省事（官方 TS 绑定有 google-protobuf 兼容坑，避坑）。
 3. **neo4j 密码**：用 `NEO4J_PASSWORD` 环境变量注入，不写死在代码/镜像里。
 4. **挂载一致性**：scip 容器与 mcp 容器必须挂载同一批项目、同一路径（都同路径挂载），且 `CODE_PROJECTS` / `SCIP_PROJECTS` 一致，否则 index.scip 里的相对路径对不上。
@@ -190,7 +189,7 @@ services:
 ## 9. 实现状态
 
 - [x] `docker/scip/` 网关（HTTP job 服务 + scip/indexers）
-- [x] backend 新工具：`generate_scip_index` / `import_to_graph` / `query_graph`
+- [x] backend 新工具：`generate_scip_index` / `query_graph`（fork 聚合期直写 Neo4j，`import_to_graph` 已移除）
 - [x] `apps/graph-app/` Three.js 3D 渲染页（:18081）
 - [x] docker-compose 扩 3 services + `scripts/deploy-graph.sh`
 - [x] Neo4j 图模型 + UNWIND 批量导入脚本（`neo4j.service.ts` 建普通索引，Community 兼容）

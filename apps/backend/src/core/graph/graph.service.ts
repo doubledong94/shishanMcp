@@ -4,7 +4,7 @@ import * as path from "node:path";
 import { CodeReaderService } from "../code-reader.service";
 import { DataStoreService } from "../data-store.service";
 import { GraphConfig } from "./graph-config";
-import { ScipClientService, ScipIndexJson } from "./scip-client.service";
+import { ScipClientService } from "./scip-client.service";
 import { Neo4jService } from "./neo4j.service";
 
 export interface GenerateResult {
@@ -13,16 +13,6 @@ export interface GenerateResult {
   status: string;
   message: string;
   indexPath?: string;
-  graph?: Record<string, number>;
-}
-
-export interface ImportResult {
-  project: string;
-  files: number;
-  symbols: number;
-  references: number;
-  statements: number;
-  message: string;
   graph?: Record<string, number>;
 }
 
@@ -54,11 +44,10 @@ export interface QueryResult {
 }
 
 /**
- * 代码图谱编排：SCIP 精确符号图 → Neo4j 图数据库。
+ * 代码图谱编排：SCIP 精确符号图 → Neo4j 图数据库（scip-java fork 聚合期直写）。
  *
- * 三个工具方法（供 MCP 工具与 REST 复用）：
- *  - generateScipIndex: 调 scip 网关生成 index.scip
- *  - importGraph: 把 index.scip 写入 Neo4j
+ * 两个工具方法（供 MCP 工具与 REST 复用）：
+ *  - generateScipIndex: 调 scip 网关生成索引（fork 聚合期直写 Neo4j）
  *  - queryGraph: 执行 cypher，把路径图结果存快照、可被图谱页渲染
  */
 @Injectable()
@@ -92,7 +81,7 @@ export class GraphService {
     const graphNote =
       graph && Object.values(graph).some((n) => n > 0)
         ? ` 已直写入库：${formatCounts(graph)}`
-        : " 未检测到图数据（若未用 --scip-java fork，需再调 import_to_graph）";
+        : " 未检测到图数据（请确认用 --scip-java fork 部署，索引即入库）";
     return {
       project,
       jobId,
@@ -100,51 +89,6 @@ export class GraphService {
       message: `已生成 index.scip（项目 ${project}）。${graphNote}`,
       indexPath: job.indexPath,
       graph,
-    };
-  }
-
-  // ---------- 工具 2：导入图数据 ----------
-
-  async importGraph(project: string): Promise<ImportResult> {
-    this.assertProject(project);
-    await this.neo4j.ensureSchema();
-
-    // fork 直写已入库：直接返回统计，避免重复导入。
-    try {
-      const existing = await this.neo4j.countProject(project);
-      if (existing && Object.values(existing).some((n) => n > 0)) {
-        return {
-          project,
-          files: 0,
-          symbols: 0,
-          references: 0,
-          statements: 0,
-          message: `项目 ${project} 已由 scip-java fork 直写入库，无需再导入。${formatCounts(existing)}`,
-          graph: existing,
-        };
-      }
-    } catch {
-      /* 连接失败走旧导入路径，让旧逻辑给出更清晰的报错 */
-    }
-
-    let scipIndex: ScipIndexJson | null = null;
-    try {
-      scipIndex = await this.scip.getIndexJson(project);
-    } catch (err) {
-      this.logger.warn(
-        `读取 scip 索引失败，跳过符号图：${err instanceof Error ? err.message : err}`,
-      );
-    }
-
-    const statements = buildImportStatements(project, scipIndex);
-    await this.neo4j.runAll(statements);
-
-    const counts = countImport(scipIndex);
-    return {
-      project,
-      ...counts,
-      statements: statements.length,
-      message: `已将项目 ${project} 导入图数据库（${statements.length} 条写入语句）`,
     };
   }
 
@@ -240,123 +184,6 @@ function formatCounts(graph: Record<string, number>): string {
     .filter(([, n]) => n > 0)
     .map(([label, n]) => `${label}=${n}`)
     .join(" ");
-}
-
-// ---------- 导入语句构造 ----------
-
-/**
- * 把 SCIP 符号图转成一批参数化 cypher 语句（批量 UNWIND）。
- *
- * 图模型：
- *   (:Project)-[:CONTAINS]->(:File)
- *   (:File)-[:HAS_SYMBOL]->(:Symbol)           // 该文件定义的符号
- *   (:Symbol)-[:REFERENCES]->(:Symbol)         // 跨文件引用
- */
-function buildImportStatements(
-  project: string,
-  scip: ScipIndexJson | null,
-): Array<{ query: string; params: Record<string, unknown> }> {
-  const out: Array<{ query: string; params: Record<string, unknown> }> = [];
-
-  out.push({
-    query: "MERGE (p:Project {id:$id}) SET p.name=$name, p.updatedAt=$updatedAt",
-    params: { id: project, name: project, updatedAt: new Date().toISOString() },
-  });
-
-  // ---- SCIP 符号子图 ----
-  if (scip?.documents && scip.documents.length > 0) {
-    const symbols: Array<Record<string, unknown>> = [];
-    const refEdges: Array<{ from: string; to: string }> = [];
-    const symDefMap = new Map<string, { file: string; start: number; end: number }>();
-
-    for (const doc of scip.documents) {
-      for (const occ of doc.occurrences || []) {
-        const isDef = (occ.symbol_roles || 0) & 1;
-        const [start, end] = occ.range || [0, 0];
-        if (isDef) {
-          symbols.push({
-            id: scipSymbolId(project, occ.symbol),
-            name: shortSymbol(occ.symbol),
-            signature: occ.symbol,
-            filePath: doc.relative_path,
-            start,
-            end,
-          });
-          symDefMap.set(occ.symbol, { file: doc.relative_path, start, end });
-        }
-      }
-    }
-
-    // 引用：同一符号名被定义过才算边（去重）
-    for (const doc of scip.documents) {
-      for (const occ of doc.occurrences || []) {
-        const isDef = (occ.symbol_roles || 0) & 1;
-        if (isDef) continue;
-        if (!symDefMap.has(occ.symbol)) continue;
-        const from = scipSymbolId(project, `${occ.symbol}@${doc.relative_path}:${occ.range?.[0] ?? 0}`);
-        const to = scipSymbolId(project, occ.symbol);
-        refEdges.push({ from, to });
-        symbols.push({
-          id: from,
-          name: shortSymbol(occ.symbol),
-          signature: occ.symbol,
-          filePath: doc.relative_path,
-          start: occ.range?.[0] ?? 0,
-          end: occ.range?.[1] ?? 0,
-        });
-      }
-    }
-
-    if (symbols.length > 0) {
-      out.push({
-        query: `
-          UNWIND $symbols AS s
-          MERGE (sym:Symbol {id:s.id})
-          SET sym.name=s.name, sym.signature=s.signature,
-              sym.start=s.start, sym.end=s.end,
-              sym.filePath=s.filePath, sym.projectId=$projectId
-          WITH sym, s
-          MATCH (file:File {projectId:$projectId, path:s.filePath})
-          MERGE (file)-[:HAS_SYMBOL]->(sym)`,
-        params: { projectId: project, symbols },
-      });
-    }
-
-    if (refEdges.length > 0) {
-      out.push({
-        query: `
-          UNWIND $edges AS e
-          MATCH (a:Symbol {id:e.from})
-          MATCH (b:Symbol {id:e.to})
-          MERGE (a)-[:REFERENCES]->(b)`,
-        params: { edges: refEdges },
-      });
-    }
-  }
-
-  return out;
-}
-
-function scipSymbolId(project: string, symbol: string): string {
-  return `scip:${project}:${symbol}`;
-}
-
-function shortSymbol(symbol: string): string {
-  // scip 符号形如 "scip-python python module pkg.py -1/hello (name:8:2) /hello/name"
-  const m = symbol.match(/[ /]+([\w.]+)\s*\(/);
-  return m ? m[1] : symbol;
-}
-
-function countImport(scip: ScipIndexJson | null): { files: number; symbols: number; references: number } {
-  const syms = new Set<string>();
-  let refs = 0;
-  for (const doc of scip?.documents || []) {
-    for (const occ of doc.occurrences || []) {
-      if ((occ.symbol_roles || 0) & 1) syms.add(occ.symbol);
-      else refs++;
-    }
-  }
-  return { files: scip?.documents?.length ?? 0, symbols: syms.size, references: refs };
 }
 
 // ---------- 查询结果 → 可渲染图 ----------

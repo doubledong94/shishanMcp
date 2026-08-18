@@ -12,7 +12,6 @@ import { GraphConfig } from "./graph-config";
 export class Neo4jService {
   private readonly logger = new Logger(Neo4jService.name);
   private driver: Driver | null = null;
-  private ready = false;
 
   constructor(private readonly config: GraphConfig) {}
 
@@ -32,24 +31,6 @@ export class Neo4jService {
 
   session(mode: "read" | "write" = "read"): Session {
     return this.getDriver().session({ defaultAccessMode: mode === "write" ? "WRITE" : "READ" });
-  }
-
-  /** 建约束/索引（幂等，idempotent）。 */
-  async ensureSchema(): Promise<void> {
-    if (this.ready) return;
-    const session = this.session("write");
-    try {
-      for (const q of [
-        "CREATE CONSTRAINT project_id IF NOT EXISTS FOR (p:Project) REQUIRE p.id IS UNIQUE",
-        "CREATE INDEX file_uniq IF NOT EXISTS FOR (f:File) ON (f.projectId, f.path)",
-        "CREATE INDEX symbol_name IF NOT EXISTS FOR (s:Symbol) ON (s.name)",
-      ]) {
-        await session.run(q);
-      }
-      this.ready = true;
-    } finally {
-      await session.close();
-    }
   }
 
   /** 执行一条 cypher，返回 neo4j 原生记录。 */
@@ -80,28 +61,6 @@ export class Neo4jService {
       await session.close();
     }
     return counts;
-  }
-
-  /** 一次事务内批量执行多条 cypher（用于导入）。 */
-  async runAll<T>(statements: Array<{ query: string; params: Record<string, unknown> }>): Promise<void> {
-    if (statements.length === 0) return;
-    const session = this.session("write");
-    const tx = session.beginTransaction();
-    try {
-      for (const st of statements) {
-        await tx.run(st.query, st.params);
-      }
-      await tx.commit();
-    } catch (err) {
-      try {
-        await tx.rollback();
-      } catch {
-        /* ignore */
-      }
-      throw err;
-    } finally {
-      await session.close();
-    }
   }
 
   async close(): Promise<void> {

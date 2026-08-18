@@ -14,7 +14,7 @@
 ```
 
 - 删除三段易损环节：`index.scip` 文件产物、`scip print --json` protobuf 转换、backend 的 `buildImportStatements` 导入逻辑
-- MCP 工具从 3 个变 2 个：`generate_scip_index`（索引即入库）、`query_graph`（cypher 查询 + 3D 渲染）；`import_to_graph` 废弃
+- MCP 工具从 3 个变 2 个：`generate_scip_index`（索引即入库）、`query_graph`（cypher 查询 + 3D 渲染）；`import_to_graph` 已移除
 - scip 容器增加 `NEO4J_URI` / `NEO4J_USER` / `NEO4J_PASSWORD` 环境变量
 
 ## 2. scip-java fork 直写设计
@@ -220,7 +220,7 @@ RETURN cm, v1, v2
 - [x] scip-java fork：环境变量注入连接信息（NEO4J_URI/USER/PASSWORD/DATABASE）
 - [x] 独立测试脚本（`scip-java/scripts/e2e-graph-test.sh`：一次性 Neo4j + 断言）
 - [x] shishanMcp：compose 给 scip 容器注入 NEO4J_* 环境变量
-- [x] shishanMcp：`generate_scip_index` 返回写入统计（graph 字段）；`import_to_graph` 改为兼容守卫（fork 已入库则直接返回统计，否则回退旧导入）；`query_graph` 新增 preset 预置模板
+- [x] shishanMcp：`generate_scip_index` 返回写入统计（graph 字段）；`import_to_graph` 已移除（fork 直写为唯一入库路径，旧 SCIP-JSON 导入链删除）；`query_graph` 新增 preset 预置模板
 - [x] fork：运行时值节点（每次出现一个，读写区分）+ FLOWS（赋值/末写/传参/返回）+ CONTROLS + REF + ELSE + CalledReturn
 - [x] fork：分支感知数据流（分支作用域复制父态 / 并集合并 / 嵌套 / 循环反馈 / return 分支不合并 / 确定性赋值清空预写 / 反馈 happenLaterThan / 循环携带依赖 outer-only 读进反馈 / unwrittenReads 向上传播）
 - [x] fork：写穿引用（reversedRef：`obj.field = x` 写目标为字段、基对象记已写）+ 字段访问 REF 边（类嵌套方向）
@@ -228,4 +228,4 @@ RETURN cm, v1, v2
 - [x] fork：数组访问 INDEX 边（`arr[i]`）；引用方向细化（markUnreadReturn：写目标 REF 翻转 member→base）
 - [x] 全量验证：`deploy-graph.sh --scip-java <fork> okhttp` 端到端（网关 → fork → Neo4j 直写 → backend 工具可用）
 
-> 说明：`import_to_graph` 与 `/api/index/:project` 未彻底删除，而是作为非 fork 部署的回退路径保留（用 `--scip-java` fork 时其自动短路为只读统计）。
+> 说明：`import_to_graph` 及旧 `buildImportStatements`/`getIndexJson` 导入链已删除（fork 直写是唯一入库路径）；`/api/index/:project` 网关端点保留，供调试控制台的 SCIP 索引查看器使用。

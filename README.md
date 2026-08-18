@@ -14,7 +14,7 @@
 ```
 
 装好后把 `http://localhost:13000/` 配给你的 AI 客户端（见"让你的 AI 客户端连上它"），
-然后 AI 就能 `generate_scip_index` 建索引、`import_to_graph` 导入、`query_graph` 查询依赖图了。
+然后 AI 就能 `generate_scip_index` 建索引（索引即入库）、`query_graph` 查询依赖图了。
 
 ---
 
@@ -158,17 +158,16 @@ claude mcp add --transport http shishan http://127.0.0.1:13000
 
 ## 代码图谱（可选）
 
-部署时带上 Neo4j 密码（见上"2A. 部署"）后，AI 会额外看到 3 个图谱工具：
+部署时带上 Neo4j 密码（见上"2A. 部署"）后，AI 会额外看到 2 个图谱工具：
 
-- `generate_scip_index(project, language)`：调 scip 索引网关生成精确符号索引
-- `import_to_graph(project)`：把 index.scip 符号图写入 Neo4j 图数据库
-- `query_graph(project, cypher)`：对 Neo4j 执行 cypher，把结果渲染到 :18081 三维图页面
+- `generate_scip_index(project, language)`：调 scip 索引网关生成索引；用 `--scip-java` fork 部署时**索引即入库**（聚合期直写 Neo4j），返回 graph 统计
+- `query_graph(project, preset?, cypher?)`：对 Neo4j 执行 cypher，把结果渲染到 :18081 三维图页面（可传 preset 用预置模板，或自定义）
 
 典型工作流（Agent 自主编排）：
 
 ```
-generate_scip_index("proj-a", "typescript") → import_to_graph("proj-a")
-  → query_graph("proj-a", "MATCH p=(a:Symbol)-[:REFERENCES*1..5]->(b:Symbol) RETURN p")
+generate_scip_index("proj-a", "java")   // fork 直写 Neo4j
+  → query_graph("proj-a", preset="calls")   // 或自定义 cypher
 ```
 
 - 数据持久化在宿主机 `$DATA_DIR/neo4j`（bind mount），重建/回收容器不丢。
@@ -211,4 +210,4 @@ open http://localhost:18081   # 代码图谱 3D 页（需先有视图，直接�
 
 - **改了代码需要重新构建**：`deploy-graph.sh` 每次都 `--build` 重新构建镜像，改动后重跑即可。
 - **图谱页（18081）打开是空白**：图谱页按 URL hash 加载快照，直接打开 `http://localhost:18081` 没有视图是正常的；要让 AI 先调 `query_graph` 拿到 `viewUrl`（形如 `http://localhost:18081/#/view/<proj>/<viewId>`）再打开。
-- **`import_to_graph` 报"未配置 NEO4J_PASSWORD"**：用 `deploy-graph.sh --password <密码>` 部署；密码通过 compose 注入，不能缺省。
+- **`generate_scip_index` 返回"未检测到图数据"**：确认用 `deploy-graph.sh --scip-java <fork dist>` 部署（fork 聚合期直写 Neo4j）；`--password` 为 Neo4j 密码，不能缺省。
