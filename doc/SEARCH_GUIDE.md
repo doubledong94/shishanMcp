@@ -161,7 +161,37 @@ MATCH (:Method{name:$m})-[:CALLS]<-[:CALLS]-(:CalledMethod)-[:ARG_OF]<-
 | 嵌套 | `nesting` | `(:Value)-[:REF]->(:CalledMethod)-[:CALLS]->(:Method)` |
 | 相交 | 自定义双 MATCH | 两段路径汇聚于同一 `CalledMethod`/`CalledParam` |
 
-## 11. 已实现 / 待实现对照
+## 11. 五维关系：循环与正交
+
+五个维度不是彼此独立的，它们构成一个**四维循环** + 一个**正交维度**：
+
+```
+数据 ──CONTROLS──► 逻辑 ──LEADS_TO──► 时机 ──(跨函数NEXT)──► 顺序 ──(FLOWS推导)──► 数据
+嵌套 ───────────────────────────── 正交 ─────────────────────────────► (可在任意节点相交)
+```
+
+| 步 | 语义 | 边 |
+| --- | --- | --- |
+| 数据 → 逻辑 | bool 表达式的值决定走哪个分支 | `(:Value)-[:CONTROLS]->(:Condition)` |
+| 逻辑 → 时机 | 分支决定哪些调用发生 | `(:Condition)-[:LEADS_TO]->(:CalledMethod)` |
+| 时机 → 顺序 | 调用把被调方法的执行插入调用者的顺序链 | `(:CalledMethod)-[:NEXT]->被调首事件 ... ->return槽-[:NEXT]->(:CalledReturn)-[:NEXT]->调用者后续` |
+| 顺序 → 数据 | 写先于读才可达，末写→读构成数据流 | `FLOWS`（由执行顺序推导） |
+
+**四维闭环查询**（从任意维度起步）：
+
+```cypher
+// 从数据出发：一个值一路影响 逻辑→时机→顺序→数据（跨函数）
+MATCH p=(v:Value)-[:CONTROLS]->(c:Condition)-[:LEADS_TO]->(cm:CalledMethod)
+      -[:NEXT]->(calleeFirst)-[:NEXT*1..5]->(calleeExit)-[:NEXT]->(cr:CalledReturn)-[:NEXT]->(callerNext:Value)
+WHERE v.id=$dataId
+RETURN p LIMIT 20
+```
+
+**嵌套维度正交性**：嵌套（`REF`/`INDEX`）讲的是**结构**（哪个实例访问哪个成员），不是**执行**（谁先谁后）。它不参与循环，但在循环的**任意节点**（条件/调用点/值）上都可以相交——即"相交搜索"的本质。
+
+**循环的 may 语义**：顺序→数据在实现上是独立推导（FLOWS 来自数据流分析，非 NEXT 链计算），两者一致但不互斥——`order_true/false`（指定表达式真值）与对应分支的数据流天然对得上。
+
+## 12. 已实现 / 待实现对照
 
 | 搜索类型 | 状态 |
 | --- | --- |
