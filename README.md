@@ -9,8 +9,11 @@
 ## 快速上手（30 秒预览）
 
 ```bash
-# 代码图谱版：MCP + scip 网关 + Neo4j 图数据库（--password 是 Neo4j 密码，必填）
-./scripts/deploy-graph.sh --password your-pass /path/to/proj-a
+# 代码图谱版：MCP + scip 网关 + Neo4j 图数据库。
+# --password 是 Neo4j 密码，必填；--scip-java 指向本地编译的 fork 发行版（索引即入库，见"方式 A"）
+./scripts/deploy-graph.sh --password your-pass \
+  --scip-java /path/to/scip-java/scip-java/build/install/scip-java \
+  /path/to/proj-a
 ```
 
 装好后把 `http://localhost:13000/` 配给你的 AI 客户端（见"让你的 AI 客户端连上它"），
@@ -44,10 +47,15 @@
 代码图谱版一键脚本 `deploy-graph.sh` 会用 docker compose 构建镜像并启动 **3 个容器**（MCP + scip 索引网关 + Neo4j 图数据库）。把要分析的项目目录作为参数传给它（相对/绝对路径都行，可传多个）：
 
 ```bash
-./scripts/deploy-graph.sh --password my-secret-pass /path/to/proj-a /path/to/proj-b
+./scripts/deploy-graph.sh --password my-secret-pass \
+  --scip-java /path/to/scip-java/scip-java/build/install/scip-java \
+  /path/to/proj-a /path/to/proj-b
 ```
 
-`--password` 是 Neo4j 密码，必填。脚本会：停掉并删除旧容器 → 构建镜像 → 把每个项目**同路径挂载**（宿主机绝对路径 = 容器内路径，只读）→ 把数据目录同样同路径挂载（可写，存放项目产生的数据/日志）→ 启动 3 个服务：`shishan-mcp`（MCP + 2 个网页）、`shishan-scip`（scip 索引网关，仅内网 8000）、`shishan-neo4j`（图数据库，端口 7474/7687）→ 自动清理旧的悬空镜像。启动后访问：
+- `--password` 是 Neo4j 密码，必填。
+- **`--scip-java <dist>`：用本地编译的 scip-java 发行版替换 scip 容器内置的官方版**——这是启用"索引即入库"（fork 聚合期直写 Neo4j）的关键，见下方"本地 scip-java（fork）替换官方版"节。
+
+脚本会：停掉并删除旧容器 → 构建镜像 → 把每个项目**同路径挂载**（宿主机绝对路径 = 容器内路径，只读）→ 把数据目录同样同路径挂载（可写，存放项目产生的数据/日志）→ 启动 3 个服务：`shishan-mcp`（MCP + 2 个网页）、`shishan-scip`（scip 索引网关，仅内网 8000）、`shishan-neo4j`（图数据库，端口 7474/7687）→ 自动清理旧的悬空镜像。启动后访问：
 
 - MCP / 控制台 / 图谱页：13000 / 18080 / **18081**
 - Neo4j Browser：`http://localhost:7474`（neo4j / 你设的密码）
@@ -59,6 +67,24 @@
 ```bash
 ./scripts/deploy-graph.sh --data /path/to/my-data --password my-secret-pass /path/to/proj-a
 ```
+
+#### 本地 scip-java（fork）替换官方版
+
+镜像内置的是官方 scip-java（只产 `index.scip`，**不写 Neo4j**）。本项目的图数据由 **scip-java fork**（带语法树等自定义增强）在聚合期**直写 Neo4j**——要启用，用 `--scip-java` 把本地编译的 fork 发行版挂进 scip 容器，替换官方版：
+
+```bash
+# 1. 在 scip-java 仓库构建 fork 发行版
+cd /path/to/scip-java && ./gradlew :scip-java:installDist
+
+# 2. 部署时指向它（目录下有可执行的 bin/scip-java）
+./scripts/deploy-graph.sh --password my-secret-pass \
+  --scip-java /path/to/scip-java/scip-java/build/install/scip-java \
+  /path/to/proj-a
+```
+
+机制：`deploy-graph.sh` 把 `<dist>` 只读挂载到 scip 容器 `/app/scip-java`，并用 `docker/scip/scip-java-wrapper` 覆盖 `/usr/local/bin/scip-java`，转发到 fork 的启动器。scip 网关已注入 `NEO4J_URI/USER/PASSWORD` 环境变量，fork 聚合完成后直接写入 Neo4j（`generate_scip_index` 返回的 `graph` 字段是入库统计）。
+
+> **Kotlin 项目**：fork 内嵌的 scip-kotlinc 与目标项目 Kotlin 编译器版本硬绑定（当前对齐 Kotlin 2.4.10），需把项目 Kotlin 升级到对应版本，详见 `doc/gradle-compat-guide.md`。Java 项目无需处理。
 
 > `deploy-graph.sh` 本质是 docker compose 的封装：它把 N 个项目循环生成**同路径只读挂载**（compose 原生不支持任意数量卷，用脚本生成的 override 注入）。想直接用 compose 也行，compose 用环境变量（`:?` 强制必填）传参，但项目 vmount 需要自己把脚本生成的 override 一并 `-f` 传，最省事还是直接跑脚本：
 >
@@ -120,7 +146,7 @@ docker run -d --name shishan-mcp \
   -v /Users/you/projects/proj-c:/Users/you/projects/proj-c:ro \
   ghcr.io/your-name/shishan-mcp:latest
 ```
-（18081 是代码图谱页；该场景不连 Neo4j 的话，图谱工具会提示未配置密码，其余功能不受影响。）
+（18081 是代码图谱页。**注意**：方式 2B 用发布镜像，内置的是官方 scip-java——无法用 `--scip-java` 挂载本地 fork，图数据不会直写 Neo4j，图谱工具会提示未配置/未检测到图数据。需要图数据请用方式 A + `--scip-java`。其余功能不受影响。）
 
 规则（和方式 A 相同）：
 
