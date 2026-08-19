@@ -173,5 +173,6 @@ MATCH (:Method{name:$m})-[:CALLS]<-[:CALLS]-(:CalledMethod)-[:ARG_OF]<-
 | 类范围（super/sub/inPackage） | ✅ `ancestors`/`descendants`/`inPackage` preset（需 param） |
 | 多态 override 搜索 | ✅ `polymorphism` preset（OVERRIDES） |
 | 执行顺序（第 5 方向） | ✅ `codeorder` preset（NEXT 边，旧项目亦未实现的补全） |
+| 执行顺序 × 逻辑配合 | ✅ `order_true`/`order_false` preset：经 CONTROLS 找条件，走 then(NEXT)/else(ELSE) 链 |
 | 排除（exclude*） | ⚠️ 可作为查询参数 |
 | 正则 FA 引擎 | ❌ 不移植（cypher 原生支持路径模式） |

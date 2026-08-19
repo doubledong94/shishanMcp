@@ -90,6 +90,18 @@ const PRESETS: Record<string, { description: string; needsParam: boolean; cypher
     cypher:
       "MATCH p=(a {projectId:$project})-[:NEXT*1..8]->(b {projectId:$project}) RETURN p LIMIT 50",
   },
+  order_true: {
+    description: "某表达式为 true 时的执行顺序（param=表达式名，经 CONTROLS 找条件、走 then 的 NEXT 链）",
+    needsParam: true,
+    cypher:
+      "MATCH (e:Value {projectId:$project, name:$name})-[:CONTROLS]->(c:Condition) MATCH p=(c)-[:NEXT*1..6]->(x {projectId:$project}) RETURN p LIMIT 50",
+  },
+  order_false: {
+    description: "某表达式为 false 时的执行顺序（param=表达式名，走条件 else 分支的链）",
+    needsParam: true,
+    cypher:
+      "MATCH (e:Value {projectId:$project, name:$name})-[:CONTROLS]->(c:Condition) MATCH p=(c)-[:ELSE]->(y {projectId:$project})-[:NEXT*1..5]->(x {projectId:$project}) RETURN p LIMIT 50",
+  },
 };
 
 const PRESET_NAMES = Object.keys(PRESETS) as [string, ...string[]];
