@@ -10,7 +10,7 @@
       #app { position: fixed; inset: 0; }
       canvas { display: block; }
       .panel {
-        position: fixed; top: 12px; left: 12px; z-index: 10;
+        position: fixed; top: 12px; right: 12px; z-index: 10;
         background: rgba(13,17,23,0.85); border: 1px solid #30363d;
         border-radius: 8px; padding: 12px; width: 300px; font-size: 13px;
       }
@@ -35,6 +35,139 @@
       .sel { font-size: 12px; color: #f0883e; min-height: 16px; margin-bottom: 4px; word-break: break-all; }
       .panel button.secondary { background: #30363d; }
       .panel button.secondary:hover { background: #484f58; }
+
+      /* 标量查询结果（query_graph / 探索返回的非图数据） */
+      .result-box { margin-top: 12px; border-top: 1px solid #30363d; padding-top: 8px; }
+      .result-box h2 { font-size: 13px; margin-bottom: 4px; color: #e6edf3; }
+      .result-box .result-rows {
+        max-height: 28vh; overflow: auto; background: #161b22;
+        border: 1px solid #30363d; border-radius: 6px;
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px;
+      }
+      .result-box .result-row {
+        display: block; padding: 3px 8px; border-bottom: 1px solid #21262d;
+        color: #c9d1d9; white-space: pre-wrap; word-break: break-all;
+      }
+      .result-box .result-row:last-child { border-bottom: none; }
+      .result-box .result-row b { color: #58a6ff; font-weight: 600; }
+
+      /* ---------- 左侧代码查看器侧边栏 ---------- */
+      .code-toggle {
+        position: fixed; top: 12px; left: 0; z-index: 30;
+        background: #238636; color: #fff; border: none; border-radius: 0 6px 6px 0;
+        padding: 10px 8px; cursor: pointer; font-size: 13px; writing-mode: vertical-rl;
+        letter-spacing: 2px;
+      }
+      .code-toggle:hover { background: #2ea043; }
+      .code-panel {
+        position: fixed; top: 0; left: 0; bottom: 0; z-index: 20;
+        width: 460px; max-width: 92vw;
+        background: #0d1117; border-right: 1px solid #30363d;
+        display: flex; flex-direction: column; font-size: 13px;
+        transition: transform 0.2s ease;
+      }
+      .code-panel.closed { transform: translateX(-100%); }
+      .code-header {
+        display: flex; align-items: center; gap: 8px; padding: 10px 12px;
+        border-bottom: 1px solid #30363d; background: #161b22;
+      }
+      .code-header h2 { font-size: 14px; color: #e6edf3; flex: 1; }
+      .code-header .icon-btn {
+        background: #30363d; color: #c9d1d9; border: none; border-radius: 4px;
+        padding: 4px 8px; cursor: pointer; font-size: 13px;
+      }
+      .code-header .icon-btn:hover { background: #484f58; }
+      .code-body { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+      .code-proj { padding: 8px 12px; border-bottom: 1px solid #21262d; }
+      .code-proj label { color: #8b949e; font-size: 12px; margin-right: 6px; }
+      .code-proj select {
+        width: 100%; background: #161b22; color: #c9d1d9;
+        border: 1px solid #30363d; border-radius: 6px; padding: 5px; font-size: 13px;
+      }
+      .code-tree-wrap { flex: 0 0 38%; min-height: 0; display: flex; flex-direction: column; border-bottom: 1px solid #21262d; }
+      .tree-tools {
+        display: flex; align-items: center; gap: 8px; padding: 8px 12px 4px;
+      }
+      .tree-tools .tree-title { font-size: 12px; color: #8b949e; white-space: nowrap; }
+      .code-tree-wrap input {
+        flex: 1; background: #161b22; color: #c9d1d9;
+        border: 1px solid #30363d; border-radius: 6px; padding: 5px 8px; font-size: 12px;
+      }
+      .code-tree-wrap input:focus { outline: none; border-color: #58a6ff; }
+      .tree { flex: 1; overflow: auto; padding: 4px 6px 8px; font-size: 12.5px; }
+      .tree .trow {
+        display: flex; align-items: center; gap: 5px; padding: 3px 8px;
+        border-radius: 5px; white-space: nowrap; cursor: pointer;
+        border-left: 2px solid transparent; color: #c9d1d9;
+      }
+      .tree .trow:hover { background: #161b22; }
+      .tree .trow .chev {
+        flex: none; width: 14px; text-align: center; color: #8b949e; font-size: 10px;
+        opacity: 0.85;
+      }
+      .tree .trow .dot {
+        flex: none; width: 7px; height: 7px; border-radius: 50%;
+        background: #6e7681; margin: 0 3px;
+      }
+      .tree .dir-row .name { font-weight: 600; color: #d29922; }
+      .tree .dir-row .dot { background: #d29922; border-radius: 2px; width: 9px; height: 9px; }
+      .tree .dir-row.root .name { color: #e6edf3; }
+      .tree .file-row .name { color: #c9d1d9; }
+      .tree .file-row:hover .name { color: #e6edf3; }
+      .tree .file-row.selected { background: #1f6feb22; border-left-color: #58a6ff; }
+      .tree .file-row.selected .name { color: #79c0ff; }
+      .tree .trow .name { overflow: hidden; text-overflow: ellipsis; }
+      .tree .tree-empty { color: #8b949e; padding: 10px; font-size: 12px; }
+      .code-viewer { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+      .code-toolbar {
+        display: flex; align-items: center; gap: 6px; padding: 6px 12px;
+        border-bottom: 1px solid #21262d; flex-wrap: wrap;
+      }
+      .code-toolbar .cursor-info { font-size: 12px; color: #8b949e; flex: 1; min-width: 120px; }
+      .code-toolbar .cursor-info b { color: #f0883e; }
+      .code-toolbar button {
+        background: #238636; color: #fff; border: none; border-radius: 5px;
+        padding: 5px 10px; cursor: pointer; font-size: 12px;
+      }
+      .code-toolbar button:disabled { background: #30363d; color: #8b949e; cursor: not-allowed; }
+      .code-toolbar button:hover:not(:disabled) { background: #2ea043; }
+      .code-toolbar button.secondary { background: #30363d; color: #c9d1d9; }
+      .code-toolbar button.secondary:hover { background: #484f58; }
+      .code {
+        flex: 1; overflow: auto; margin: 0; user-select: text; cursor: text;
+      }
+      .code .code-line {
+        display: flex; line-height: 1.55; width: max-content; min-width: 100%;
+      }
+      .code .ln {
+        flex: none; width: 48px; text-align: right; padding-right: 10px;
+        color: #484f58; user-select: none; background: #0d1117;
+      }
+      .code .txt { white-space: pre; padding-right: 16px; }
+      .code .code-line.found { background: #3a2d12; }
+      .code .code-line.actCursor { background: #1f6feb22; }
+      .tok-kw { color: #ff7b72; }
+      .tok-str { color: #a5d6ff; }
+      .tok-com { color: #8b949e; font-style: italic; }
+      .tok-num { color: #79c0ff; }
+      .tok-fn { color: #d2a8ff; }
+      .tok-type { color: #7ee787; }
+      .tok-def { color: #ffa657; }
+      .locate { border-top: 1px solid #21262d; max-height: 40%; overflow: auto; background: #161b22; }
+      .locate-header { padding: 6px 12px; color: #8b949e; font-size: 12px; }
+      .locate-empty { padding: 8px 12px; color: #f85149; font-size: 12px; }
+      .locate-row {
+        display: flex; align-items: center; gap: 6px; padding: 4px 12px;
+        cursor: pointer; border-top: 1px solid #21262d; font-size: 12px;
+      }
+      .locate-row:hover { background: #21262d; }
+      .locate-row.in-graph { background: #1f6feb1a; }
+      .locate-badge {
+        flex: none; padding: 1px 6px; border-radius: 4px; font-size: 11px;
+        color: #0d1117; font-weight: 600; min-width: 74px; text-align: center;
+      }
+      .locate-row .locate-name { font-weight: 600; color: #e6edf3; }
+      .locate-row .locate-meta { color: #8b949e; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     </style>
   </head>
   <body>
@@ -48,6 +181,10 @@
       <button id="view-btn">加载并渲染</button>
       <div class="stats" id="stats"></div>
       <div class="error" id="error"></div>
+      <div class="result-box" id="result-box" hidden>
+        <h2>查询结果</h2>
+        <div class="result-rows" id="result-rows"></div>
+      </div>
       <div class="explore">
         <h2>探索</h2>
         <div id="sel" class="sel">未选中节点</div>
@@ -67,6 +204,38 @@
       <div class="hint">
         拖拽旋转 / 滚轮缩放 / 右键平移。单击节点选中后，
         可沿方向（数据流/调用/嵌套/控制/顺序）把相邻节点扩展进图。
+      </div>
+    </div>
+
+    <!-- 左侧代码查看器（可折叠侧边栏） -->
+    <button id="code-toggle" class="code-toggle" title="打开代码查看器">代码</button>
+    <div id="code-panel" class="code-panel closed">
+      <div class="code-header">
+        <h2>代码查看器</h2>
+        <button id="code-collapse" class="icon-btn" title="折叠侧边栏">◂</button>
+      </div>
+      <div class="code-body">
+        <div class="code-proj">
+          <select id="code-project"></select>
+        </div>
+        <div class="code-tree-wrap">
+          <div class="tree-tools">
+            <span class="tree-title">文件</span>
+            <input id="tree-filter" type="text" placeholder="过滤文件名…" />
+          </div>
+          <div id="tree" class="tree">
+            <div class="tree-empty">选择项目后加载目录树</div>
+          </div>
+        </div>
+        <div class="code-viewer">
+          <div class="code-toolbar">
+            <span id="cursor-info" class="cursor-info">点击代码定位光标符号</span>
+            <button id="locate-btn" disabled>定位 Neo4j 节点</button>
+            <button id="clear-locate-btn" class="secondary" disabled>清除高亮</button>
+          </div>
+          <div id="code" class="code" tabindex="0"></div>
+          <div id="locate-results" class="locate" hidden></div>
+        </div>
       </div>
     </div>
     <script type="module" src="/src/main.js"></script>

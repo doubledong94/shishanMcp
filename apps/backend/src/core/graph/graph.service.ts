@@ -31,6 +31,26 @@ export interface GraphEdge {
 export interface GraphView {
   nodes: GraphNode[];
   edges: GraphEdge[];
+  /** 非图结构（纯标量）结果，逐行格式化，供图谱页展示真实值。 */
+  rows?: string[];
+}
+
+/** 光标符号反查的命中节点（运行时 / 非运行时通用）。line 已归一为 1-based。 */
+export interface SymbolMatch {
+  id: string;
+  label: string;
+  kind: string;
+  name: string;
+  line: number;
+  /** SCIP 起始列（0-based），命中该标识符在行内的起始字符位。 */
+  col: number;
+  /** SCIP 结束列（0-based，开区间），命中该标识符在行内的结束字符位。 */
+  colEnd: number;
+  file: string;
+  signature: string;
+  symbol: string;
+  /** 距离光标行的行差（绝对值），越小越可能精确命中。 */
+  lineDelta: number;
 }
 
 export interface QueryResult {
@@ -114,6 +134,51 @@ export class GraphService {
     };
   }
 
+  /**
+   * 按「文件 + 行号 + 列 + 光标下的标识符」从 Neo4j 反查符号节点。
+   * 前端行/列都是 1-based；Neo4j 里 SCIP 的 range 是 0-based，因此查询前统一转 0-based。
+   * 只做精确命中（同文件 + 同 0-based 行 + 光标列在节点 col 之后），
+   * 不命中就返回空；历史无列数据不再回退（重索引后全量带 col）。
+   * 返回结构化命中列表（n 自身，不扩展邻居）与可合并进 3D 画布的 nodes 视图。
+   */
+  async findSymbol(
+    project: string,
+    file: string,
+    line: number,
+    name: string,
+    col?: number,
+  ): Promise<{ project: string; file: string; line: number; name: string; col?: number; matches: SymbolMatch[]; view: GraphView }> {
+    this.assertProject(project);
+    const line0 = line - 1; // 前端 1-based → Neo4j SCIP 0-based（^第1行=0）
+    const col0 = col ? col - 1 : -1; // 1-based → 0-based，未传列时不做列过滤
+    const nameClause = `(n.name = $name OR n.signature CONTAINS $name OR n.symbol CONTAINS $name)`;
+    const fileClause = `(n.file = $file OR n.filePath = $file)`;
+    const cypher =
+      `MATCH (n {projectId:$project}) ` +
+      `WHERE ${fileClause} ` +
+      `AND n.line = $line0 ` +
+      // 光标列必须落在节点起始列之后。不用 col < colEnd 做上界判断：多行 occurrence 的
+      // endCharacter 属于结束行，可能比起始列小（col < colEnd 会误拒真命中）。
+      `AND coalesce(n.col, -1) <= $col0 ` +
+      `AND ${nameClause} ` +
+      `RETURN n LIMIT 400`;
+    const records = await this.neo4j.run(
+      cypher,
+      { project, file, line0, col0, name },
+      "read",
+    );
+    const matches = extractMatches(records, line);
+    return {
+      project,
+      file,
+      line,
+      name,
+      col,
+      matches,
+      view: extractGraphView(cypher, records),
+    };
+  }
+
   /** 取某个已保存的快照（供前端渲染）。 */
   loadView(project: string, viewId: string): (GraphView & { id: string; project: string; cypher: string }) | null {
     const file = viewPath(this.data.getRoot(), project, viewId);
@@ -188,6 +253,49 @@ function formatCounts(graph: Record<string, number>): string {
 
 // ---------- 查询结果 → 可渲染图 ----------
 
+/**
+ * 从 findSymbol 的 records 里抽出命中节点列表（n 变量），按与光标行的行差排序。
+ * Neo4j 的 line/col 是 SCIP 0-based；对前端只暴露 line 的 1-based 换算（行高亮/展示用），
+ * col/colEnd 保留 0-based 原始值（标识符在行内的起止字符位，供调试展示）。
+ */
+function extractMatches(records: unknown[], cursorLine: number): SymbolMatch[] {
+  const out: SymbolMatch[] = [];
+  const seen = new Set<string>();
+  for (const rec of records as Array<{ get: (k: string) => any }>) {
+    const n = rec.get("n");
+    if (!n || typeof n !== "object") continue;
+    const id = `node-${n.identity.toString()}`;
+    if (seen.has(id)) continue;
+    seen.add(id);
+    const props = n.properties || {};
+    const labels = n.labels || [];
+    const line = neo4jInteger(props.line) + 1; // 0-based → 1-based（与前端/dist DOM 对齐）
+    out.push({
+      id,
+      label: (labels[0] as string) || "Node",
+      kind: String(props.kind ?? ""),
+      name: String(props.name ?? ""),
+      line,
+      col: neo4jInteger(props.col),
+      colEnd: neo4jInteger(props.colEnd),
+      file: String(props.file ?? props.filePath ?? ""),
+      signature: String(props.signature ?? ""),
+      symbol: String(props.symbol ?? ""),
+      lineDelta: Math.abs(line - cursorLine),
+    });
+  }
+  out.sort((a, b) => a.lineDelta - b.lineDelta);
+  return out.filter((m) => m.label !== "Result");
+}
+
+/** neo4j-driver 的整数可能是 Long，统一转成 number。 */
+function neo4jInteger(v: unknown): number {
+  if (v == null) return 0;
+  if (typeof v === "number") return v;
+  if (typeof (v as any).toNumber === "function") return Number((v as any).toNumber());
+  return Number(v) || 0;
+}
+
 /** 把 neo4j 返回的记录里的 Node/Relationship/Path 抽取成 nodes/edges。 */
 function isNeo4jNode(v: Record<string, any>): boolean {
   return typeof v === "object" && v !== null && Array.isArray(v.labels) && "properties" in v;
@@ -211,6 +319,7 @@ function isNeo4jPath(v: Record<string, any>): boolean {
 function extractGraphView(cypher: string, records: unknown[]): GraphView {
   const nodes: GraphNode[] = [];
   const edges: GraphEdge[] = [];
+  const rows: string[] = [];
   const nodeSeen = new Set<string>();
   const edgeSeen = new Set<string>();
 
@@ -267,13 +376,49 @@ function extractGraphView(cypher: string, records: unknown[]): GraphView {
 
   for (const rec of records as Array<{ keys: string[]; get: (k: string) => unknown }>) {
     for (const key of rec.keys) {
-      visit(rec.get(key));
+      const raw = rec.get(key);
+      if (isScalar(raw)) {
+        rows.push(`${key}: ${scalarText(raw)}`);
+      } else {
+        visit(raw);
+      }
     }
   }
 
   if (nodes.length === 0) {
-    // 纯标量结果，包成一个说明节点
-    addNode("result", "查询结果", "Result");
+    // 纯标量结果：把第一个结果作为说明节点标签，让 3D 页显示真实值
+    addNode(
+      "result",
+      rows.length === 1 ? rows[0] : rows.length > 1 ? `查询结果（${rows.length} 行）` : "查询结果",
+      "Result",
+    );
   }
-  return { nodes, edges };
+  return { nodes, edges, rows };
+}
+
+/** 标量值（string/number/boolean/null、neo4j 数值类型等），不是 Node/Rel/Path。 */
+function isScalar(v: unknown): boolean {
+  if (v == null) return true;
+  if (Array.isArray(v)) return v.every(isScalar);
+  const t = typeof v;
+  if (t === "string" || t === "number" || t === "boolean") return true;
+  if (t === "object") {
+    const o = v as Record<string, any>;
+    return !Array.isArray(o.labels) && !Array.isArray(o.segments) && typeof o.type !== "string";
+  }
+  return true;
+}
+
+function scalarText(v: unknown): string {
+  if (v == null) return String(v);
+  if (Array.isArray(v)) return v.map((x) => scalarText(x)).join(", ");
+  if (typeof v === "string") return v;
+  if (typeof v === "number" || typeof v === "boolean") return String(v);
+  if (typeof (v as any)?.toNumber === "function") return String((v as any).toNumber());
+  if (typeof (v as any)?.toString === "function") return (v as any).toString();
+  try {
+    return JSON.stringify(v);
+  } catch {
+    return String(v);
+  }
 }

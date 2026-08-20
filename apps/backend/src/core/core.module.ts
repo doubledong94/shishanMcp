@@ -4,6 +4,7 @@ import { ToolExecutorService } from "./tool-executor.service";
 import { CallLogService } from "./call-log.service";
 import { CodeReaderService } from "./code-reader.service";
 import { DataStoreService } from "./data-store.service";
+import { ProjectFileService } from "./project-file.service";
 import { GraphConfig } from "./graph/graph-config";
 import { ScipClientService } from "./graph/scip-client.service";
 import { Neo4jService } from "./graph/neo4j.service";
@@ -22,6 +23,7 @@ import { ScipIndexViewerService } from "./graph/scip-index-viewer.service";
     CallLogService,
     CodeReaderService,
     DataStoreService,
+    ProjectFileService,
     GraphConfig,
     ScipClientService,
     Neo4jService,
@@ -34,6 +36,7 @@ import { ScipIndexViewerService } from "./graph/scip-index-viewer.service";
     CallLogService,
     CodeReaderService,
     DataStoreService,
+    ProjectFileService,
     GraphService,
     ScipIndexViewerService,
   ],

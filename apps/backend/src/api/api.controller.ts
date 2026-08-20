@@ -3,6 +3,7 @@ import { ModuleRef } from "@nestjs/core";
 import { CallLogService } from "../core/call-log.service";
 import { DataStoreService } from "../core/data-store.service";
 import { CodeReaderService } from "../core/code-reader.service";
+import { ProjectFileService } from "../core/project-file.service";
 import { GraphService } from "../core/graph/graph.service";
 import { ScipIndexViewerService } from "../core/graph/scip-index-viewer.service";
 import { TOOL_REGISTRY } from "../tools/registry";
@@ -25,6 +26,7 @@ export class ApiController {
     private readonly calls: CallLogService,
     private readonly data: DataStoreService,
     private readonly reader: CodeReaderService,
+    private readonly files: ProjectFileService,
     private readonly graph: GraphService,
     private readonly scipViewer: ScipIndexViewerService,
     private readonly moduleRef: ModuleRef,
@@ -88,6 +90,52 @@ export class ApiController {
     return {
       projects: this.reader.listProjects(),
     };
+  }
+
+  /** 某项目某目录下的条目（供图谱页代码查看器的目录树；默认隐藏重型目录）。 */
+  @Get("projects/:project/entries")
+  getProjectEntries(@Param("project") project: string, @Query("path") p?: string) {
+    return { project, dir: p || "", entries: this.files.entries(project, p || "") };
+  }
+
+  /** 读取某项目内的一个文本文件（供图谱页代码查看器）。 */
+  @Get("projects/:project/file")
+  getProjectFile(@Param("project") project: string, @Query("path") p?: string) {
+    if (!p) {
+      throw new BadRequestException("缺少 path 参数（项目内相对路径）");
+    }
+    const file = this.files.read(project, p);
+    if (!file) {
+      throw new NotFoundException(`文件不存在或不可读: ${p}`);
+    }
+    return file;
+  }
+
+  /**
+   * 按「文件 + 行号 + 列 + 光标下标识符」反查 Neo4j 符号节点（运行时的
+   * CalledMethod/Value/Condition 与非运时的 Class/Method/Field/Value 一起返回），
+   * 附带一张可合并进 3D 画布的 nodes 视图。
+   */
+  @Get("graph/symbol")
+  async getGraphSymbol(
+    @Query("project") project?: string,
+    @Query("file") file?: string,
+    @Query("line") line?: string,
+    @Query("name") name?: string,
+    @Query("col") col?: string,
+  ) {
+    if (!project || !file) {
+      throw new BadRequestException("需要 project 和 file 参数");
+    }
+    const lineNum = Number(line);
+    if (!line || !Number.isInteger(lineNum) || lineNum < 1 || !name?.trim()) {
+      throw new BadRequestException("需要合法的 line 和 name 参数（光标所在行号与标识符）");
+    }
+    const colNum = col ? Number(col) : undefined;
+    if (col !== undefined && (!Number.isInteger(colNum) || (colNum as number) < 1)) {
+      throw new BadRequestException("col 参数必须是正整数（1-based 列号）");
+    }
+    return this.graph.findSymbol(project, file, lineNum, name.trim().slice(0, 200), colNum);
   }
 
   /** 某项目的图视图快照列表（供 :18081 图谱页选择）。 */
