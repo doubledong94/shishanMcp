@@ -35,6 +35,8 @@
       .sel { font-size: 12px; color: #f0883e; min-height: 16px; margin-bottom: 4px; word-break: break-all; }
       .panel button.secondary { background: #30363d; }
       .panel button.secondary:hover { background: #484f58; }
+      .panel .view-ctrl { display: flex; gap: 8px; margin-top: 8px; }
+      .panel .view-ctrl button { margin-top: 0; width: auto; flex: 1; font-size: 12px; }
 
       /* 标量查询结果（query_graph / 探索返回的非图数据） */
       .result-box { margin-top: 12px; border-top: 1px solid #30363d; padding-top: 8px; }
@@ -200,10 +202,15 @@
         </select>
         <button id="expand-btn" disabled>向选中节点扩展</button>
         <button id="reset-btn" class="secondary">重置为当前视图</button>
+        <div class="view-ctrl">
+          <button id="mode-btn" class="secondary">切到 3D</button>
+          <button id="layout-btn" class="secondary">暂停布局</button>
+        </div>
       </div>
       <div class="hint">
-        拖拽旋转 / 滚轮缩放 / 右键平移。单击节点选中后，
-        可沿方向（数据流/调用/嵌套/控制/顺序）把相邻节点扩展进图。
+        2D：左键拖拽平移 / 滚轮缩放 / 中键绕 Z 旋转。3D：拖拽轨道旋转。
+        单击节点选中（半透明→变亮并显示标签）、双击平滑聚焦、
+        右键让边沿流光脉冲级联。选中后可沿方向（数据流/调用/嵌套/控制/顺序）扩展。
       </div>
     </div>
 

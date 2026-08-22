@@ -1,5 +1,6 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+import { createTweenEngine, sineInOut } from "./anim.js";
 
 const app = document.getElementById("app");
 const projectSel = document.getElementById("project");
@@ -13,20 +14,510 @@ const selEl = document.getElementById("sel");
 const dirSel = document.getElementById("dir");
 const expandBtn = document.getElementById("expand-btn");
 const resetBtn = document.getElementById("reset-btn");
+const modeBtn = document.getElementById("mode-btn");
+const layoutBtn = document.getElementById("layout-btn");
 
-let scene, camera, renderer, controls, graphGroup;
-let nodeMeshes = new Map(); // node id -> THREE.Mesh
-let nodesById = new Map(); // node id -> node
-let selectedId = null;
-let highlightIds = new Set(); // 定位 Neo4j 节点时的命中高亮
+// ===================== 3D 图谱可视化（对齐旧项目 shishandaimaViewer） =====================
+const tween = createTweenEngine();
+
+let scene, camera, renderer, controls; // controls = OrbitControls（仅 3D 模式使用）
+let graphGroup;
+let nodeSprites = new Map(); // id -> { sprite, label, base }
+let nodesById = new Map(); // id -> node
+let nodePos = new Map(); // id -> THREE.Vector3
+let edgeMesh = null; // InstancedMesh（相机朝向带状边 + 流光）
+let edgeData = []; // {from,to} 与实例索引对齐
+let edgeFlow = new Float32Array(0); // 每实例 flow（-2 表示无流光）
 let state = { nodes: [], edges: [] };
+let selectedId = null;
+let hoverId = null;
+let highlightIds = new Set(); // 定位 Neo4j 节点时的命中高亮
 
+let layoutMode = "2d"; // 2d（默认，平移/缩放/绕Z）| 3d（轨道）
+let layoutRunning = true;
+let viewTarget = new THREE.Vector3(0, 0, 0); // 2D 视角中心
+let viewDist = 60; // 2D 相机距离
+let viewRotZ = 0; // 2D 绕 Z 旋转
+let lastTime = performance.now();
+let densityTick = 0;
+
+const raycaster = new THREE.Raycaster();
+const pointer = new THREE.Vector2();
+const _dummy = new THREE.Object3D();
+const _v1 = new THREE.Vector3();
+const _v2 = new THREE.Vector3();
+const _v3 = new THREE.Vector3();
+const _v4 = new THREE.Vector3();
+const _m = new THREE.Matrix4();
+const _c = new THREE.Color();
+
+// ---------- 节点配色：保留按 kind 的类型彩虹配色 ----------
+const KIND_COLORS = {
+  Class: 0x7ee787,
+  Method: 0xd2a8ff,
+  Field: 0x79c0ff,
+  Value: 0xffa657,
+  CalledMethod: 0xe3b341,
+  Condition: 0xff7b72,
+  Symbol: 0x238636,
+  File: 0x58a6ff,
+  Project: 0xe3b341,
+  Result: 0xff7b72,
+};
+const DEF_COLOR = 0x8b949e;
+
+function kindColor(kind) {
+  return KIND_COLORS[kind] ?? DEF_COLOR;
+}
+
+// 圆形贴片纹理（billboard 扁平圆形，中间实、边缘羽化到透明）
+const DISC_TEX = (() => {
+  const c = document.createElement("canvas");
+  c.width = c.height = 64;
+  const g = c.getContext("2d");
+  const r = g.createRadialGradient(32, 32, 0, 32, 32, 32);
+  r.addColorStop(0, "rgba(255,255,255,1)");
+  r.addColorStop(0.65, "rgba(255,255,255,0.9)");
+  r.addColorStop(1, "rgba(255,255,255,0)");
+  g.fillStyle = r;
+  g.fillRect(0, 0, 64, 64);
+  return new THREE.CanvasTexture(c);
+})();
+
+function makeNodeSprite(id) {
+  const mat = new THREE.SpriteMaterial({
+    map: DISC_TEX,
+    transparent: true,
+    depthWrite: false,
+    color: kindColor(nodesById.get(id).kind),
+  });
+  const sprite = new THREE.Sprite(mat);
+  sprite.userData.nodeId = id;
+  sprite.scale.set(2, 2, 1);
+  return sprite;
+}
+
+/** 标签只显示在选中/悬停节点上 */
+function makeLabel(text) {
+  const canvas = document.createElement("canvas");
+  canvas.width = 256;
+  canvas.height = 64;
+  const ctx = canvas.getContext("2d");
+  ctx.font = "26px system-ui, sans-serif";
+  ctx.fillStyle = "#e6edf3";
+  ctx.textBaseline = "middle";
+  ctx.fillText(text.length > 22 ? text.slice(0, 22) + "…" : text, 8, 32);
+  const tex = new THREE.CanvasTexture(canvas);
+  const mat = new THREE.SpriteMaterial({ map: tex, transparent: true, depthTest: false });
+  const sprite = new THREE.Sprite(mat);
+  sprite.scale.set(5, 1.6, 1);
+  return sprite;
+}
+
+// ---------- 边：相机朝向扁平带状 + 流光（移植旧 FlowLine） ----------
+// 每个实例是一张 1x1 平面，每帧按两端点+朝向相机定位；uv.x 沿边方向（供流光），uv.y 横跨宽度。
+const EDGE_VERT = `
+attribute float aFlow;
+varying float vUvx;
+varying float vUvy;
+void main() {
+  vUvx = uv.x;
+  vUvy = uv.y;
+  gl_Position = projectionMatrix * modelViewMatrix * instanceMatrix * vec4(position, 1.0);
+}`;
+const EDGE_FRAG = `
+#ifdef USE_INSTANCING_COLOR
+varying float vUvx;
+varying float vUvy;
+void main() {
+  vec3 c = instanceColor;
+  // 方向明暗：uv.y 大于中线一侧微亮，模拟 FlatLine 的方向暗示
+  float shade = (vUvy > 0.5) ? 1.16 : 0.9;
+  vec3 outC = c * shade;
+  // 流光：aFlow 在 [0,1] 时画一段移动亮带
+  float flow = aFlow;
+  if (flow >= 0.0 && flow <= 1.0) {
+    float band = 0.95 * smoothstep(0.16, 0.0, abs(vUvx - flow));
+    outC += band * vec3(1.0, 1.0, 0.92);
+  }
+  gl_FragColor = vec4(outC, 0.55);
+}
+#endif`;
+
+function rebuildEdges() {
+  const edges = state.edges.filter((e) => nodePos.has(e.from) && nodePos.has(e.to));
+  edgeData = edges.map((e) => ({ from: e.from, to: e.to }));
+  if (edgeMesh) {
+    graphGroup.remove(edgeMesh);
+    edgeMesh.geometry.dispose();
+    edgeMesh.material.dispose();
+    edgeMesh = null;
+  }
+  const count = edgeData.length;
+  if (count === 0) return;
+  const geo = new THREE.PlaneGeometry(1, 1);
+  edgeFlow = new Float32Array(count).fill(-2);
+  geo.setAttribute("aFlow", new THREE.InstancedBufferAttribute(edgeFlow, 1));
+  const mat = new THREE.ShaderMaterial({
+    vertexShader: EDGE_VERT,
+    fragmentShader: EDGE_FRAG,
+    transparent: true,
+    depthWrite: false,
+  });
+  edgeMesh = new THREE.InstancedMesh(geo, mat, count);
+  const color = new THREE.Color();
+  edgeData.forEach((e, i) => {
+    const src = nodesById.get(e.from);
+    color.setHex(kindColor(src ? src.kind : DEF_COLOR));
+    edgeMesh.setColorAt(i, color);
+  });
+  graphGroup.add(edgeMesh);
+}
+
+function updateEdgeMatrices() {
+  if (!edgeMesh) return;
+  const camPos = camera.position;
+  for (let i = 0; i < edgeData.length; i++) {
+    const e = edgeData[i];
+    const a = nodePos.get(e.from);
+    const b = nodePos.get(e.to);
+    if (!a || !b) {
+      _dummy.position.set(0, 0, 0);
+      _dummy.scale.setScalar(0);
+      _dummy.updateMatrix();
+      edgeMesh.setMatrixAt(i, _dummy.matrix);
+      continue;
+    }
+    _v1.copy(b).sub(a);
+    const len = _v1.length();
+    if (len < 1e-6) {
+      _dummy.position.set(0, 0, 0);
+      _dummy.scale.setScalar(0);
+      _dummy.updateMatrix();
+      edgeMesh.setMatrixAt(i, _dummy.matrix);
+      continue;
+    }
+    const dir = _v1.divideScalar(len);
+    _v2.copy(a).add(b).multiplyScalar(0.5); // 中点
+    // 宽度轴 = 垂直(指向相机方向 × 边方向)，使其朝向相机
+    _v3.copy(camPos).sub(_v2);
+    _v4.copy(_v3).cross(dir);
+    if (_v4.lengthSq() < 1e-8) _v4.set(0, 1, 0);
+    _v4.normalize();
+    const thickness = 1.1;
+    _m.makeBasis(dir.clone().multiplyScalar(len), _v4.clone().multiplyScalar(thickness), _v3.clone().cross(dir).normalize());
+    _m.setPosition(_v2);
+    edgeMesh.setMatrixAt(i, _m);
+  }
+  edgeMesh.instanceMatrix.needsUpdate = true;
+}
+
+// ---------- 布局：连续力导向仿真（移植旧 FR，让节点涌动沉降） ----------
+const LAYOUT = { repulsion: 2.5, minDist: 1.2, refTarget: 6, target: 3, spring: 0.02, center: 0.05, temperature: 0.22 };
+
+function stepLayout(dt) {
+  const nodes = state.nodes;
+  const n = nodes.length;
+  if (!n) return;
+  const k = Math.min(dt / 16.666, 2) * LAYOUT.temperature;
+  // 斥力（所有节点对）
+  for (let i = 0; i < n; i++) {
+    const a = nodePos.get(nodes[i].id);
+    for (let j = i + 1; j < n; j++) {
+      const b = nodePos.get(nodes[j].id);
+      const dx = b.x - a.x, dy = b.y - a.y, dz = b.z - a.z;
+      let dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
+      if (dist < 1e-6) { a.x += (Math.random() - 0.5) * 0.01; dist = 1e-6; }
+      const d = Math.max(dist, LAYOUT.minDist);
+      const f = (k * LAYOUT.repulsion) / (d * d);
+      const fx = (f * dx) / d, fy = (f * dy) / d, fz = (f * dz) / d;
+      a.x -= fx; a.y -= fy; a.z -= fz;
+      b.x += fx; b.y += fy; b.z += fz;
+    }
+  }
+  // 弹簧（边）
+  for (const e of state.edges) {
+    const a = nodePos.get(e.from);
+    const b = nodePos.get(e.to);
+    if (!a || !b) continue;
+    const dx = b.x - a.x, dy = b.y - a.y, dz = b.z - a.z;
+    const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
+    if (dist < 1e-6) continue;
+    const target = e.label === "REFERENCES" ? LAYOUT.refTarget : LAYOUT.target;
+    const fx = ((dist - target) / dist) * dx * k * LAYOUT.spring;
+    const fy = ((dist - target) / dist) * dy * k * LAYOUT.spring;
+    const fz = ((dist - target) / dist) * dz * k * LAYOUT.spring;
+    a.x += fx; a.y += fy; a.z += fz;
+    b.x -= fx; b.y -= fy; b.z -= fz;
+  }
+  // 居中（拉向当前质心，防止整体漂移）
+  let cx = 0, cy = 0, cz = 0;
+  for (const v of nodePos.values()) { cx += v.x; cy += v.y; cz += v.z; }
+  cx /= n; cy /= n; cz /= n;
+  for (const v of nodePos.values()) {
+    v.x -= cx * k * LAYOUT.center;
+    v.y -= cy * k * LAYOUT.center;
+    v.z -= cz * k * LAYOUT.center;
+  }
+  if (layoutMode === "2d") for (const v of nodePos.values()) v.z = 0;
+  // 同步对象位置
+  for (const [id, v] of nodePos) {
+    const ent = nodeSprites.get(id);
+    if (ent) ent.sprite.position.copy(v);
+  }
+}
+
+// ---------- 密度自适应大小（移植 scaleByDistance：密处小、疏处大） ----------
+function updateScaleByDistance() {
+  const nodes = state.nodes;
+  const n = nodes.length;
+  if (n < 2) return;
+  for (let i = 0; i < n; i++) {
+    const a = nodePos.get(nodes[i].id);
+    let best = Infinity;
+    for (let j = 0; j < n; j++) {
+      if (i === j) continue;
+      const b = nodePos.get(nodes[j].id);
+      const dx = a.x - b.x, dy = a.y - b.y;
+      const d2 = dx * dx + dy * dy;
+      if (d2 < best) best = d2;
+    }
+    const dist = Math.max(Math.sqrt(best), 0.4);
+    const node = nodes[i];
+    const isRoot = node.kind === "Project" || node.kind === "Result";
+    const s = isRoot ? 3.6 : THREE.MathUtils.clamp(2.4 * Math.sqrt(dist * 0.6), 1.0, 3.2);
+    const ent = nodeSprites.get(node.id);
+    if (ent) ent.sprite.scale.set(s, s, 1);
+  }
+}
+
+function updateLabelPositions() {
+  for (const [id, ent] of nodeSprites) {
+    const v = nodePos.get(id);
+    if (!v) continue;
+    ent.label.position.copy(v).add(_v1.set(0, ent.sprite.scale.y * 0.8, 0));
+  }
+}
+
+/** 统一应用高亮/透明态：选中|高亮 → 提亮 alpha 1.0；悬停 → 微亮；其余 → 半透明 */
+function applyHighlights() {
+  for (const [id, ent] of nodeSprites) {
+    const on = id === selectedId || id === hoverId || highlightIds.has(id);
+    if (id === selectedId || highlightIds.has(id)) {
+      _c.setHex(ent.base).multiplyScalar(1.28);
+      ent.sprite.material.color.copy(_c);
+      ent.sprite.material.opacity = 1.0;
+    } else if (id === hoverId) {
+      _c.setHex(ent.base).multiplyScalar(1.14);
+      ent.sprite.material.color.copy(_c);
+      ent.sprite.material.opacity = 0.92;
+    } else {
+      ent.sprite.material.color.setHex(ent.base);
+      ent.sprite.material.opacity = 0.35;
+    }
+    ent.label.visible = on;
+  }
+}
+
+// ---------- 相机 / 控制器（2D 平移缩放 + 3D 轨道） ----------
+function cameraForMode() {
+  if (layoutMode === "2d") {
+    camera.position.set(viewTarget.x, viewTarget.y, viewDist);
+    camera.lookAt(viewTarget.x, viewTarget.y, 0);
+    camera.rotateZ(viewRotZ);
+  }
+}
+
+function centerView() {
+  const nodes = state.nodes;
+  if (!nodes.length) return;
+  let cx = 0, cy = 0, cz = 0, maxR = 0;
+  for (const n of nodes) {
+    const v = nodePos.get(n.id);
+    cx += v.x; cy += v.y; cz += v.z;
+  }
+  cx /= nodes.length; cy /= nodes.length; cz /= nodes.length;
+  for (const n of nodes) {
+    const v = nodePos.get(n.id);
+    const r = Math.hypot(v.x - cx, v.y - cy, v.z - cz);
+    if (r > maxR) maxR = r;
+  }
+  viewTarget.set(cx, cy, cz);
+  viewDist = THREE.MathUtils.clamp(maxR * 3 + 24, 30, 400);
+  if (layoutMode === "3d") {
+    controls.target.copy(viewTarget);
+    camera.position.set(cx + maxR * 1.6 + 8, cy + maxR + 8, cz + maxR * 1.6 + 8);
+    controls.update();
+  }
+}
+
+// ---------- 探针 / 交互 ----------
+function pickNode(clientX, clientY) {
+  const rect = renderer.domElement.getBoundingClientRect();
+  pointer.x = ((clientX - rect.left) / rect.width) * 2 - 1;
+  pointer.y = -((clientY - rect.top) / rect.height) * 2 + 1;
+  raycaster.setFromCamera(pointer, camera);
+  const sprites = [];
+  nodeSprites.forEach((ent) => sprites.push(ent.sprite));
+  const hits = raycaster.intersectObjects(sprites, false);
+  const hit = hits.find((h) => h.object.userData && h.object.userData.nodeId);
+  return hit ? hit.object.userData.nodeId : null;
+}
+
+const drag = { active: false, button: -1, startX: 0, startY: 0, lastX: 0, lastY: 0, moved: false };
+
+function setupInteraction() {
+  const el = renderer.domElement;
+
+  el.addEventListener("pointerdown", (e) => {
+    if (layoutMode === "2d") {
+      drag.active = true;
+      drag.button = e.button;
+      drag.startX = drag.lastX = e.clientX;
+      drag.startY = drag.lastY = e.clientY;
+      drag.moved = false;
+      el.setPointerCapture(e.pointerId);
+    }
+  });
+
+  el.addEventListener("pointermove", (e) => {
+    if (layoutMode === "2d" && drag.active) {
+      const dx = e.clientX - drag.lastX;
+      const dy = e.clientY - drag.lastY;
+      drag.lastX = e.clientX;
+      drag.lastY = e.clientY;
+      if (Math.abs(e.clientX - drag.startX) + Math.abs(e.clientY - drag.startY) > 3) drag.moved = true;
+      if (drag.button === 0 || drag.button === 2) {
+        // 平移（按当前 2D 视角尺度换算到世界）
+        const worldPerPx = (2 * viewDist * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2))) / renderer.domElement.clientHeight;
+        viewTarget.x -= (dx * Math.cos(viewRotZ) + dy * Math.sin(viewRotZ)) * worldPerPx;
+        viewTarget.y -= (-dx * Math.sin(viewRotZ) + dy * Math.cos(viewRotZ)) * worldPerPx;
+        if (layoutMode === "2d") viewTarget.z = 0;
+      } else if (drag.button === 1) {
+        viewRotZ += dx * 0.005;
+      }
+      return;
+    }
+    // 悬停拾取（节流）
+    const id = pickNode(e.clientX, e.clientY);
+    if (id !== hoverId) {
+      hoverId = id;
+      applyHighlights();
+    }
+  });
+
+  const endDrag = (e) => {
+    if (layoutMode !== "2d" || !drag.active) return;
+    drag.active = false;
+    if (!drag.moved && e.button === 0) {
+      const id = pickNode(e.clientX, e.clientY);
+      selectNode(id);
+      applyHighlights();
+    }
+  };
+  el.addEventListener("pointerup", endDrag);
+  el.addEventListener("pointercancel", endDrag);
+
+  // 缩放（2D）
+  el.addEventListener("wheel", (e) => {
+    if (layoutMode !== "2d") return;
+    e.preventDefault();
+    viewDist *= 1 + e.deltaY * 0.0012;
+    viewDist = THREE.MathUtils.clamp(viewDist, 5, 2000);
+  }, { passive: false });
+
+  // 双击聚焦（纯平移，不改距离/朝向，向旧项目聚焦语义）
+  el.addEventListener("dblclick", (e) => {
+    const id = pickNode(e.clientX, e.clientY);
+    if (id) focusNode(id);
+  });
+
+  // 右键流光级联
+  el.addEventListener("contextmenu", (e) => {
+    e.preventDefault();
+    const id = pickNode(e.clientX, e.clientY);
+    if (id) startFlowFrom(id);
+  });
+}
+
+/** 相机平滑聚焦到节点：正弦缓动平移（2D 移视角中心，3D 平移相机+target，保持距离/朝向）。 */
+function focusNode(id) {
+  const p = nodePos.get(id);
+  if (!p) return;
+  if (layoutMode === "2d") {
+    const fx = viewTarget.x, fy = viewTarget.y;
+    tween.add({
+      from: 0, to: 1, duration: 500, ease: sineInOut,
+      onUpdate: (t) => {
+        viewTarget.x = fx + (p.x - fx) * t;
+        viewTarget.y = fy + (p.y - fy) * t;
+      },
+    });
+  } else {
+    const from = {
+      cx: camera.position.x, cy: camera.position.y, cz: camera.position.z,
+      tx: controls.target.x, ty: controls.target.y, tz: controls.target.z,
+    };
+    // 保持的偏移（方向+距离不变）——用局部变量，避免被共享临时向量覆写
+    const off = camera.position.clone().sub(controls.target);
+    const endPos = p.clone().add(off);
+    tween.add({
+      from: 0, to: 1, duration: 500, ease: sineInOut,
+      onUpdate: (t) => {
+        camera.position.set(
+          from.cx + (endPos.x - from.cx) * t,
+          from.cy + (endPos.y - from.cy) * t,
+          from.cz + (endPos.z - from.cz) * t,
+        );
+        controls.target.set(
+          from.tx + (p.x - from.tx) * t,
+          from.ty + (p.y - from.ty) * t,
+          from.tz + (p.z - from.tz) * t,
+        );
+      },
+    });
+  }
+}
+
+/** 边流光脉冲：沿「该节点 → 选中邻居」的边传播，到达端点再级联（穿越选中子图）。 */
+function startFlowFrom(id) {
+  const edges = state.edges;
+  for (let i = 0; i < edges.length; i++) {
+    const e = edges[i];
+    let targetId = null;
+    if (e.from === id && nodeSprites.has(e.to)) targetId = e.to;
+    else if (e.to === id && nodeSprites.has(e.from)) targetId = e.from;
+    if (!targetId || targetId === id) continue;
+    // 只有到达端点是「选中/高亮」才继续级联；否则仅让这条边亮一次
+    const cascade = targetId === selectedId || highlightIds.has(targetId);
+    animateFlowEdge(i, targetId, cascade);
+  }
+}
+
+function animateFlowEdge(idx, targetId, cascade) {
+  edgeFlow[idx] = 0;
+  edgeMesh.instanceMatrix.needsUpdate = true;
+  tween.add({
+    from: 0, to: 1, duration: 550, ease: sineInOut,
+    onUpdate: (v) => {
+      edgeFlow[idx] = v;
+      edgeMesh.instanceMatrix.needsUpdate = true;
+    },
+    onEnd: () => {
+      edgeFlow[idx] = -2;
+      edgeMesh.instanceMatrix.needsUpdate = true;
+      if (cascade) startFlowFrom(targetId); // 级联到下一跳
+    },
+  });
+}
+
+// ---------- 场景初始化与主循环 ----------
 function initThree() {
   scene = new THREE.Scene();
-  scene.background = new THREE.Color(0x0d1117);
+  scene.background = new THREE.Color(0x0a0a0f); // 对齐旧项目 (0.1,0.1,0.12)（无光照 unlit）
 
-  camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 5000);
-  camera.position.set(40, 30, 40);
+  camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.001, 100000);
+  camera.position.set(0, 0, 60);
 
   renderer = new THREE.WebGLRenderer({ antialias: true });
   renderer.setSize(window.innerWidth, window.innerHeight);
@@ -35,25 +526,12 @@ function initThree() {
 
   controls = new OrbitControls(camera, renderer.domElement);
   controls.enableDamping = true;
-
-  scene.add(new THREE.AmbientLight(0xffffff, 0.6));
-  const dir = new THREE.DirectionalLight(0xffffff, 1.2);
-  dir.position.set(30, 50, 30);
-  scene.add(dir);
+  controls.enabled = false; // 默认 2D
 
   graphGroup = new THREE.Group();
   scene.add(graphGroup);
 
-  const raycaster = new THREE.Raycaster();
-  const pointer = new THREE.Vector2();
-  renderer.domElement.addEventListener("pointerdown", (e) => {
-    pointer.x = (e.clientX / window.innerWidth) * 2 - 1;
-    pointer.y = -(e.clientY / window.innerHeight) * 2 + 1;
-    raycaster.setFromCamera(pointer, camera);
-    const hits = raycaster.intersectObjects(graphGroup.children, false);
-    const hit = hits.find((h) => h.object.userData && h.object.userData.nodeId);
-    selectNode(hit ? hit.object.userData.nodeId : null);
-  });
+  setupInteraction();
 
   window.addEventListener("resize", () => {
     camera.aspect = window.innerWidth / window.innerHeight;
@@ -61,122 +539,75 @@ function initThree() {
     renderer.setSize(window.innerWidth, window.innerHeight);
   });
 
+  lastTime = performance.now();
   animate();
 }
 
-function animate() {
+function animate(now) {
   requestAnimationFrame(animate);
-  controls.update();
+  let dt = now - lastTime;
+  lastTime = now;
+  if (dt > 100) dt = 16;
+
+  tween.update(dt);
+  if (layoutRunning && state.nodes.length) stepLayout(dt);
+  densityTick++;
+  if ((densityTick & 7) === 0) updateScaleByDistance();
+  updateLabelPositions();
+  applyHighlights();
+  updateEdgeMatrices();
+  cameraForMode();
+  if (layoutMode === "3d") controls.update();
   renderer.render(scene, camera);
 }
 
-const COLOR_BY_KIND = {
-  Symbol: 0x238636,
-  File: 0x58a6ff,
-  Project: 0xe3b341,
-  Result: 0xff7b72,
-};
-
-function nodeColor(kind) {
-  return COLOR_BY_KIND[kind] ?? 0x8b949e;
-}
-
-/** 力导向式布局：给每个节点一个 3D 位置（简单斥力 + 弹簧）。 */
-function layout(nodes, edges) {
-  const pos = new Map();
-  for (const n of nodes) pos.set(n.id, new THREE.Vector3((Math.random() - 0.5) * 30, (Math.random() - 0.5) * 30, (Math.random() - 0.5) * 30));
-
-  for (let iter = 0; iter < 80; iter++) {
-    // 斥力（所有节点之间）
-    const arr = nodes.map((n) => pos.get(n.id));
-    for (let i = 0; i < arr.length; i++) {
-      for (let j = i + 1; j < arr.length; j++) {
-        const d = arr[i].clone().sub(arr[j]);
-        const dist = Math.max(d.length(), 1.2);
-        const force = d.normalize().multiplyScalar(2.5 / (dist * dist));
-        arr[i].add(force);
-        arr[j].sub(force);
-      }
-    }
-    // 弹簧（边）
-    for (const e of edges) {
-      const a = pos.get(e.from);
-      const b = pos.get(e.to);
-      if (!a || !b) continue;
-      const d = b.clone().sub(a);
-      const target = e.label === "REFERENCES" ? 6 : 3;
-      const force = d.sub(d.normalize().multiplyScalar(target)).multiplyScalar(0.02);
-      a.add(force);
-      b.sub(force);
-    }
-    // 居中
-    const centroid = new THREE.Vector3();
-    arr.forEach((v) => centroid.add(v));
-    centroid.divideScalar(Math.max(arr.length, 1));
-    arr.forEach((v) => v.sub(centroid.clone().multiplyScalar(0.05)));
-  }
-  return pos;
-}
-
-function renderGraph(data) {
-  state = data;
+// ---------- 数据接入（保留原接口） ----------
+function clearGraph() {
   while (graphGroup.children.length) graphGroup.remove(graphGroup.children[0]);
-  const nodes = data.nodes || [];
-  const edges = data.edges || [];
-  nodeMeshes.clear();
+  nodeSprites.clear();
   nodesById.clear();
+  nodePos.clear();
+  edgeMesh = null;
+  edgeData = [];
+  edgeFlow = new Float32Array(0);
+  state = { nodes: [], edges: [] };
+  selectedId = null;
+  hoverId = null;
+  highlightIds = new Set();
+}
 
-  const pos = layout(nodes, edges);
+/** 把 data 并入当前图并补齐缺失对象/位置（增量，保留已有节点位置 → 供沉降动画）。 */
+function renderGraph(data, seedId) {
+  const isFresh = state.nodes.length === 0;
+  mergeView(data);
+  nodesById.clear();
+  for (const n of state.nodes) nodesById.set(n.id, n);
 
-  for (const n of nodes) {
-    const v = pos.get(n.id) ?? new THREE.Vector3();
-    const color = nodeColor(n.kind);
-    const isRoot = n.kind === "Project" || n.kind === "Result";
-    const geo = isRoot ? new THREE.SphereGeometry(1.6, 24, 24) : new THREE.SphereGeometry(0.9, 20, 20);
-    const mat = new THREE.MeshStandardMaterial({ color, emissive: color, emissiveIntensity: 0.25 });
-    const mesh = new THREE.Mesh(geo, mat);
-    mesh.position.copy(v);
-    mesh.userData.nodeId = n.id;
-    graphGroup.add(mesh);
-    nodeMeshes.set(n.id, mesh);
-    nodesById.set(n.id, n);
-
-    // 标签
-    const label = makeLabel(n.label, color);
-    label.position.copy(v).add(new THREE.Vector3(0, 1.4, 0));
-    graphGroup.add(label);
-  }
-
-  for (const e of edges) {
-    const a = nodeMeshes.get(e.from);
-    const b = nodeMeshes.get(e.to);
-    if (!a || !b) continue;
-    const mat = new THREE.LineBasicMaterial({
-      color: 0x6e7681,
-      transparent: true,
-      opacity: 0.5,
-    });
-    const geo = new THREE.BufferGeometry().setFromPoints([a.position, b.position]);
-    graphGroup.add(new THREE.Line(geo, mat));
-  }
-
-  // 居中相机
-  if (nodes.length) {
-    const center = new THREE.Vector3();
-    let count = 0;
-    for (const v of pos.values()) {
-      center.add(v);
-      count++;
+  const seedPos = seedId ? nodePos.get(seedId) : null;
+  for (const n of state.nodes) {
+    if (nodeSprites.has(n.id)) continue;
+    const p = new THREE.Vector3();
+    if (seedPos) {
+      p.copy(seedPos).add(new THREE.Vector3((Math.random() - 0.5) * 10, (Math.random() - 0.5) * 10, 0));
+    } else {
+      p.set((Math.random() - 0.5) * 30, (Math.random() - 0.5) * 30, layoutMode === "2d" ? 0 : (Math.random() - 0.5) * 10);
     }
-    if (count) center.divideScalar(count);
-    controls.target.copy(center);
-    camera.position.copy(center).add(new THREE.Vector3(25, 20, 25));
+    nodePos.set(n.id, p);
+    const sprite = makeNodeSprite(n.id);
+    sprite.position.copy(p);
+    const label = makeLabel(n.label);
+    label.visible = false;
+    graphGroup.add(sprite);
+    graphGroup.add(label);
+    nodeSprites.set(n.id, { sprite, label, base: kindColor(n.kind) });
   }
 
-  statsEl.textContent = `${nodes.length} 节点 · ${edges.length} 边`;
+  rebuildEdges();
+  if (isFresh) centerView(); // 仅在全新加载时居中；增量并入（探索/定位）不跳相机
+  statsEl.textContent = `${state.nodes.length} 节点 · ${state.edges.length} 边`;
   errorEl.textContent = "";
   renderResultRows(data.rows);
-  selectNode(selectedId);
+  applyHighlights();
 }
 
 /** 展示非图结构（纯标量）的查询结果行。 */
@@ -210,13 +641,6 @@ function selectNode(id) {
   applyHighlights();
 }
 
-/** 高亮状态统一应用：选中的 + 已定位的节点亮起，其余恢复。 */
-function applyHighlights() {
-  for (const [nid, mesh] of nodeMeshes) {
-    mesh.material.emissiveIntensity = nid === selectedId || highlightIds.has(nid) ? 1.1 : 0.25;
-  }
-}
-
 async function expand() {
   if (!selectedId) return;
   errorEl.textContent = "";
@@ -235,8 +659,7 @@ async function expand() {
       throw new Error(`${res.status}: ${body.slice(0, 200)}`);
     }
     const view = await res.json();
-    mergeView(view);
-    renderGraph(state);
+    renderGraph(view, selectedId); // 增量并入，新节点在选中节点附近生成并沉降
   } catch (err) {
     errorEl.textContent = `扩展失败: ${err instanceof Error ? err.message : err}`;
   }
@@ -261,22 +684,6 @@ function mergeView(view) {
       seenEdge.add(key);
     }
   }
-}
-
-function makeLabel(text, color) {
-  const canvas = document.createElement("canvas");
-  canvas.width = 256;
-  canvas.height = 64;
-  const ctx = canvas.getContext("2d");
-  ctx.font = "28px system-ui, sans-serif";
-  ctx.fillStyle = "#e6edf3";
-  ctx.textBaseline = "middle";
-  ctx.fillText(text.length > 18 ? text.slice(0, 18) + "…" : text, 8, 32);
-  const tex = new THREE.CanvasTexture(canvas);
-  const mat = new THREE.SpriteMaterial({ map: tex, transparent: true, depthTest: false });
-  const sprite = new THREE.Sprite(mat);
-  sprite.scale.set(4, 1, 1);
-  return sprite;
 }
 
 async function loadProjects() {
@@ -323,6 +730,8 @@ async function load() {
       return;
     }
   }
+  // 加载新视图 → 重置当前图
+  clearGraph();
   const viewRes = await fetch(`/api/graph/views/${encodeURIComponent(project)}/${encodeURIComponent(viewId)}`);
   if (!viewRes.ok) {
     errorEl.textContent = `加载视图失败: ${viewRes.status}`;
@@ -333,6 +742,30 @@ async function load() {
 }
 
 initThree();
+
+// ---------- 控件 ----------
+modeBtn.addEventListener("click", () => {
+  layoutMode = layoutMode === "2d" ? "3d" : "2d";
+  controls.enabled = layoutMode === "3d";
+  modeBtn.textContent = layoutMode === "2d" ? "切到 3D" : "切到 2D";
+  if (layoutMode === "3d") {
+    controls.target.copy(viewTarget);
+    camera.position.set(viewTarget.x, viewTarget.y, viewDist);
+    controls.update();
+    // 三维展开：给节点加 Z 抖动，让布局离开 XY 平面
+    for (const v of nodePos.values()) v.z += (Math.random() - 0.5) * 8;
+  } else {
+    viewTarget.set(controls.target.x, controls.target.y, 0);
+    viewDist = Math.max(camera.position.distanceTo(controls.target), 5);
+    for (const v of nodePos.values()) v.z = 0;
+  }
+  applyHighlights();
+});
+
+layoutBtn.addEventListener("click", () => {
+  layoutRunning = !layoutRunning;
+  layoutBtn.textContent = layoutRunning ? "暂停布局" : "继续布局";
+});
 
 // ===================== 代码查看器（右侧可折叠侧边栏） =====================
 const codeToggleEl = document.getElementById("code-toggle");
@@ -756,8 +1189,7 @@ async function locate() {
       throw new Error(`${res.status}: ${body.slice(0, 160)}`);
     }
     const data = await res.json();
-    mergeView(data.view);
-    renderGraph(state);
+    renderGraph(data.view); // 增量并入，命中节点高亮
     highlightIds = new Set(data.matches.map((m) => m.id));
     applyHighlights();
     const inView = new Set(state.nodes.map((n) => n.id));
