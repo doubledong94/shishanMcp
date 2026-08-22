@@ -2,6 +2,7 @@ import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { createTweenEngine, sineInOut } from "./anim.js";
 
+const BUILD = "e62b8be";
 const app = document.getElementById("app");
 const projectSel = document.getElementById("project");
 const viewSel = document.getElementById("view");
@@ -959,6 +960,7 @@ async function load() {
 }
 
 initThree();
+document.getElementById("build").textContent = `build ${BUILD}`;
 
 // ---------- 控件 ----------
 modeBtn.addEventListener("click", () => {
