@@ -116,6 +116,24 @@ export class ApiController {
    * CalledMethod/Value/Condition 与非运时的 Class/Method/Field/Value 一起返回），
    * 附带一张可合并进 3D 画布的 nodes 视图。
    */
+  // [DBG] 前端自动上报的调试日志（环形缓冲，供排查"选中无视觉变化"）
+  private dbgLog: string[] = [];
+
+  @Post("graph/dbglog")
+  dbglogPost(@Body() body: { lines?: string[] }) {
+    const lines = body?.lines;
+    if (Array.isArray(lines)) {
+      for (const l of lines) if (typeof l === "string") this.dbgLog.push(l);
+      if (this.dbgLog.length > 1000) this.dbgLog.splice(0, this.dbgLog.length - 1000);
+    }
+    return { ok: true, stored: this.dbgLog.length };
+  }
+
+  @Get("graph/dbglog")
+  dbglogGet() {
+    return { stored: this.dbgLog.length, lines: this.dbgLog };
+  }
+
   @Get("graph/symbol")
   async getGraphSymbol(
     @Query("project") project?: string,

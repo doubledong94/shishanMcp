@@ -2,7 +2,7 @@ import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { createTweenEngine, sineInOut } from "./anim.js";
 
-const BUILD = "2026-08-22 21:14:42"; // 构建时间（本地，精确到秒）
+const BUILD = "2026-08-22 21:26:14"; // 构建时间（本地，精确到秒）
 const app = document.getElementById("app");
 const projectSel = document.getElementById("project");
 const viewSel = document.getElementById("view");
@@ -1019,6 +1019,28 @@ async function load() {
 
 initThree();
 document.getElementById("build").textContent = `build ${BUILD}`;
+
+// [DBG] 自动把 [DBG] 日志上报到后端 /api/graph/dbglog，方便读取排查
+(() => {
+  const _origLog = console.log;
+  const _q = [];
+  console.log = (...a) => {
+    _origLog.apply(console, a);
+    try {
+      const s = a.map((x) => (x instanceof Error ? (x.message + " " + (x.stack || "")) : String(x))).join(" ");
+      if (s.includes("[DBG]")) _q.push(s);
+    } catch (e) { /* ignore */ }
+  };
+  setInterval(() => {
+    if (!_q.length) return;
+    const batch = _q.splice(0);
+    fetch("/api/graph/dbglog", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ lines: batch }),
+    }).catch(() => {});
+  }, 2000);
+})();
 
 // ---------- 控件 ----------
 modeBtn.addEventListener("click", () => {
