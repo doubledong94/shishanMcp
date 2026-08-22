@@ -2,7 +2,7 @@ import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { createTweenEngine, sineInOut } from "./anim.js";
 
-const BUILD = "2026-08-22 20:28:13"; // 构建时间（本地，精确到秒）
+const BUILD = "2026-08-22 20:53:02"; // 构建时间（本地，精确到秒）
 const app = document.getElementById("app");
 const projectSel = document.getElementById("project");
 const viewSel = document.getElementById("view");
@@ -727,22 +727,37 @@ function initThree() {
   animate();
 }
 
+let __frame = 0;
+let __frameErrShown = false;
 function animate(now) {
   requestAnimationFrame(animate);
   let dt = now - lastTime;
   lastTime = now;
   if (dt > 100) dt = 16;
+  __frame++;
 
-  tween.update(dt);
-  if (layoutRunning && state.nodes.length) stepLayout(dt);
-  densityTick++;
-  if ((densityTick & 7) === 0) updateScaleByDistance();
-  updateLabelPositions();
-  applyHighlights();
-  updateEdgeMatrices();
-  cameraForMode();
-  if (layoutMode === "3d") controls.update();
+  try {
+    tween.update(dt);
+    if (layoutRunning && state.nodes.length) stepLayout(dt);
+    densityTick++;
+    if ((densityTick & 7) === 0) updateScaleByDistance();
+    updateLabelPositions();
+    applyHighlights();
+    updateEdgeMatrices();
+    cameraForMode();
+    if (layoutMode === "3d") controls.update();
+  } catch (err) {
+    // [DBG] 抓出每帧更新里的异常：不再吞掉、render 照常跑；首次出错打印栈
+    if (!__frameErrShown) {
+      __frameErrShown = true;
+      console.error("[DBG][ERROR] animate update threw:", err, err && err.stack);
+    }
+  }
   renderer.render(scene, camera);
+  // [DBG] 心跳：每秒打一次，确认渲染循环活着
+  if (__frame % 60 === 0) {
+    console.log(`[DBG] tick frame=${__frame} sprites=${nodeSprites.size} edges=${edgeData.length} selected=${selectedIds.size}`);
+  }
 }
 
 // ---------- 数据接入（保留原接口） ----------
