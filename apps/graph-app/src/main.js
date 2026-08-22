@@ -532,7 +532,12 @@ function handleNodeClick(id, e) {
 function setupInteraction() {
   const el = renderer.domElement;
 
+  const downAt = { x: 0, y: 0, button: -1, active: false };
   el.addEventListener("pointerdown", (e) => {
+    downAt.x = e.clientX;
+    downAt.y = e.clientY;
+    downAt.button = e.button;
+    downAt.active = true;
     if (layoutMode === "2d") {
       drag.active = true;
       drag.button = e.button;
@@ -572,16 +577,23 @@ function setupInteraction() {
     else hideTooltip();
   });
 
-  const endDrag = (e) => {
-    if (layoutMode !== "2d" || !drag.active) return;
-    drag.active = false;
-    if (!drag.moved && e.button === 0) {
-      const id = pickNode(e.clientX, e.clientY);
-      handleNodeClick(id, e); // 切换选中 / 双击聚焦 / 组合键；空点无操作
+  const endPointer = (e) => {
+    // 2D 拖拽（平移/旋转）收尾
+    if (layoutMode === "2d" && drag.active) {
+      drag.active = false;
+      if (drag.button === 0 && drag.moved) { /* 平移过，不作为点击 */ }
     }
+    // 单击选中/组合键/空点在 2D 与 3D 都生效
+    if (!downAt.active) return;
+    downAt.active = false;
+    if (e.button !== 0) return;
+    const moved = Math.hypot(e.clientX - downAt.x, e.clientY - downAt.y);
+    if (moved > 5) return;
+    const id = pickNode(e.clientX, e.clientY);
+    handleNodeClick(id, e); // 切换选中 / 双击聚焦 / 组合键；空点无操作
   };
-  el.addEventListener("pointerup", endDrag);
-  el.addEventListener("pointercancel", endDrag);
+  el.addEventListener("pointerup", endPointer);
+  el.addEventListener("pointercancel", endPointer);
 
   // 缩放（2D）
   el.addEventListener("wheel", (e) => {
