@@ -2,7 +2,7 @@ import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { createTweenEngine, sineInOut } from "./anim.js";
 
-const BUILD = "2026-08-22 20:53:02"; // 构建时间（本地，精确到秒）
+const BUILD = "2026-08-22 21:14:42"; // 构建时间（本地，精确到秒）
 const app = document.getElementById("app");
 const projectSel = document.getElementById("project");
 const viewSel = document.getElementById("view");
@@ -863,6 +863,31 @@ function dbgSelection(tag) {
     );
   }
   console.log(`[DBG] ${tag} selectedIds.size=${selectedIds.size}\n` + lines.join("\n"));
+  // [DBG] 读取选中节点的实际渲染像素（离屏渲染后读回），判断材质是否真的画出来
+  if (selectedIds.size > 0) {
+    const id = activeId ?? selectedIds.values().next().value;
+    const px = readNodePixel(id);
+    if (px) console.log(`[DBG] renderedPixel(${id}) = [${px.join(",")}]`);
+  }
+}
+
+/** [DBG] 把场景渲到离屏纹理，读某节点屏幕位置的真实 RGBA */
+function readNodePixel(id) {
+  const sp = nodeSprites.get(id);
+  if (!sp) return null;
+  const W = renderer.domElement.width;
+  const H = renderer.domElement.height;
+  const rt = new THREE.WebGLRenderTarget(W, H);
+  renderer.setRenderTarget(rt);
+  renderer.render(scene, camera);
+  const p = sp.sprite.getWorldPosition(new THREE.Vector3()).project(camera);
+  const sx = Math.max(0, Math.min(W - 1, Math.floor((p.x * 0.5 + 0.5) * W)));
+  const sy = Math.max(0, Math.min(H - 1, Math.floor((-p.y * 0.5 + 0.5) * H)));
+  const buf = new Uint8Array(4);
+  renderer.readRenderTargetPixels(rt, sx, H - 1 - sy, 1, 1, buf);
+  renderer.setRenderTarget(null);
+  rt.dispose();
+  return Array.from(buf);
 }
 /** 清空并选中单个节点（聚焦/定位落点）。 */
 function selectOnly(id) {
