@@ -32,6 +32,7 @@ let state = { nodes: [], edges: [] };
 let selectedId = null;
 let hoverId = null;
 let highlightIds = new Set(); // 定位 Neo4j 节点时的命中高亮
+let groupIds = new Set(); // 组合键/维度选择的范围高亮
 
 let layoutMode = "2d"; // 2d（默认，平移/缩放/绕Z）| 3d（轨道）
 let layoutRunning = true;
@@ -302,8 +303,8 @@ function updateLabelPositions() {
 /** 统一应用高亮/透明态：选中|高亮 → 提亮 alpha 1.0；悬停 → 微亮；其余 → 半透明 */
 function applyHighlights() {
   for (const [id, ent] of nodeSprites) {
-    const on = id === selectedId || id === hoverId || highlightIds.has(id);
-    if (id === selectedId || highlightIds.has(id)) {
+    const on = id === selectedId || id === hoverId || highlightIds.has(id) || groupIds.has(id);
+    if (id === selectedId || highlightIds.has(id) || groupIds.has(id)) {
       _c.setHex(ent.base).multiplyScalar(1.28);
       ent.sprite.material.color.copy(_c);
       ent.sprite.material.opacity = 1.0;
@@ -365,6 +366,127 @@ function pickNode(clientX, clientY) {
 }
 
 const drag = { active: false, button: -1, startX: 0, startY: 0, lastX: 0, lastY: 0, moved: false };
+// 双击态机：同一节点 500ms 内两次单击 = 双击聚焦（复刻旧项目 DoubleClickStateMachine，
+// 避免与「单击切换选中」冲突：第二次单击不再切换，而是选中+聚焦）。
+const DBL_TIMEOUT = 500;
+let lastClick = { id: null, time: 0 };
+const keysHeld = new Set(); // 数字键 5-9（维度选择）
+let tooltipEl = null; // 悬停信息浮窗
+
+function isTypingTarget(e) {
+  const t = e.target;
+  return t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT");
+}
+
+function nodeInfoHtml(id) {
+  const n = nodesById.get(id);
+  if (!n) return "";
+  return `kind: ${n.kind || "-"}\nlabel: ${n.label || id}`;
+}
+
+function ensureTooltip() {
+  if (tooltipEl) return tooltipEl;
+  tooltipEl = document.createElement("div");
+  tooltipEl.className = "node-tooltip";
+  tooltipEl.style.cssText =
+    "position:fixed;z-index:40;pointer-events:none;background:rgba(13,17,23,.93);color:#c9d1d9;" +
+    "border:1px solid #30363d;border-radius:6px;padding:6px 9px;font:12px/1.5 system-ui,sans-serif;" +
+    "white-space:pre;display:none;max-width:320px;overflow:hidden;text-overflow:ellipsis;";
+  document.body.appendChild(tooltipEl);
+  return tooltipEl;
+}
+function showTooltipAt(x, y, html) {
+  const t = ensureTooltip();
+  t.innerHTML = html;
+  t.style.display = "block";
+  t.style.left = x + 14 + "px";
+  t.style.top = y + 14 + "px";
+}
+function hideTooltip() {
+  if (tooltipEl) tooltipEl.style.display = "none";
+}
+
+function heldKeyNum() {
+  for (let k = 5; k <= 9; k++) if (keysHeld.has(String(k))) return k;
+  return 0;
+}
+
+/** 选中一个节点的连通分量（Ctrl+单击，等价旧项目 ctrl 选整组）。 */
+function selectConnectedComponent(id) {
+  const seen = new Set([id]);
+  const stack = [id];
+  while (stack.length) {
+    const cur = stack.pop();
+    for (const e of state.edges) {
+      const nb = e.from === cur ? e.to : e.to === cur ? e.from : null;
+      if (nb && !seen.has(nb)) { seen.add(nb); stack.push(nb); }
+    }
+  }
+  groupIds = seen;
+  selectNode(id);
+  applyHighlights();
+}
+
+/** 选中若干跳内的邻居（数字键 5..9 + 单击 = 1..5 跳）。 */
+function selectNeighbors(id, depth) {
+  let frontier = [id];
+  const seen = new Set([id]);
+  for (let d = 0; d < depth; d++) {
+    const next = [];
+    for (const cur of frontier) {
+      for (const e of state.edges) {
+        const nb = e.from === cur ? e.to : e.to === cur ? e.from : null;
+        if (nb && !seen.has(nb)) { seen.add(nb); next.push(nb); }
+      }
+    }
+    frontier = next;
+  }
+  groupIds = seen;
+  selectNode(id);
+  applyHighlights();
+}
+
+/** 在代码查看器打开节点对应的源码文件（Shift+单击，尽力而为）。 */
+function openNodeSource(id) {
+  const n = nodesById.get(id);
+  const cand = (n && n.label ? n.label : "").trim();
+  if (cand && /\//.test(cand) && !SKIP_FILE_RE.test(cand)) {
+    if (codeProjectSel.value) {
+      openFile(cand);
+      return;
+    }
+    errorEl.textContent = "未选项目，无法打开源码";
+    return;
+  }
+  errorEl.textContent = `无法从节点「${cand || id}」定位源码文件`;
+}
+
+/** 单击/组合键 统一入口：双击态机 + 组合键 + 切换选中。空点 = 无操作（对齐旧项目）。 */
+function handleNodeClick(id, e) {
+  if (id == null) {
+    lastClick.id = null;
+    lastClick.time = 0;
+    return;
+  }
+  const now = performance.now();
+  if (e.ctrlKey) { lastClick.id = id; lastClick.time = now; selectConnectedComponent(id); return; }
+  if (e.shiftKey) { lastClick.id = id; lastClick.time = now; openNodeSource(id); return; }
+  const dim = heldKeyNum();
+  if (dim) { lastClick.id = id; lastClick.time = now; selectNeighbors(id, dim - 4); return; }
+  if (lastClick.id === id && now - lastClick.time <= DBL_TIMEOUT) {
+    // 同一节点 500ms 内第二次单击 → 双击聚焦（不切换，保持选中）
+    lastClick.id = null;
+    lastClick.time = 0;
+    selectNode(id);
+    focusNode(id);
+    return;
+  }
+  lastClick.id = id;
+  lastClick.time = now;
+  // 单击：切换选中（已选中再点 → 取消选中）
+  if (selectedId === id) selectNode(null);
+  else selectNode(id);
+}
 
 function setupInteraction() {
   const el = renderer.domElement;
@@ -387,6 +509,7 @@ function setupInteraction() {
       drag.lastX = e.clientX;
       drag.lastY = e.clientY;
       if (Math.abs(e.clientX - drag.startX) + Math.abs(e.clientY - drag.startY) > 3) drag.moved = true;
+      hideTooltip();
       if (drag.button === 0 || drag.button === 2) {
         // 平移（按当前 2D 视角尺度换算到世界）
         const worldPerPx = (2 * viewDist * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2))) / renderer.domElement.clientHeight;
@@ -398,12 +521,14 @@ function setupInteraction() {
       }
       return;
     }
-    // 悬停拾取（节流）
+    // 悬停拾取 + 高亮 + tooltip
     const id = pickNode(e.clientX, e.clientY);
     if (id !== hoverId) {
       hoverId = id;
       applyHighlights();
     }
+    if (id) showTooltipAt(e.clientX, e.clientY, nodeInfoHtml(id));
+    else hideTooltip();
   });
 
   const endDrag = (e) => {
@@ -411,8 +536,7 @@ function setupInteraction() {
     drag.active = false;
     if (!drag.moved && e.button === 0) {
       const id = pickNode(e.clientX, e.clientY);
-      selectNode(id);
-      applyHighlights();
+      handleNodeClick(id, e); // 切换选中 / 双击聚焦 / 组合键；空点无操作
     }
   };
   el.addEventListener("pointerup", endDrag);
@@ -426,18 +550,20 @@ function setupInteraction() {
     viewDist = THREE.MathUtils.clamp(viewDist, 5, 2000);
   }, { passive: false });
 
-  // 双击聚焦（纯平移，不改距离/朝向，向旧项目聚焦语义）
-  el.addEventListener("dblclick", (e) => {
-    const id = pickNode(e.clientX, e.clientY);
-    if (id) focusNode(id);
-  });
-
-  // 右键流光级联
+  // 右键流光级联（shift+右键 = 反向流光，同旧项目）
   el.addEventListener("contextmenu", (e) => {
     e.preventDefault();
     const id = pickNode(e.clientX, e.clientY);
-    if (id) startFlowFrom(id);
+    if (id) startFlowFrom(id, e.shiftKey);
   });
+
+  // 数字键 5-9（+单击 = 按跳数选邻居）
+  window.addEventListener("keydown", (e) => {
+    if (isTypingTarget(e)) return;
+    if (/^[5-9]$/.test(e.key)) keysHeld.add(e.key);
+  });
+  window.addEventListener("keyup", (e) => keysHeld.delete(e.key));
+  window.addEventListener("blur", () => keysHeld.clear());
 }
 
 /** 相机平滑聚焦到节点：正弦缓动平移（2D 移视角中心，3D 平移相机+target，保持距离/朝向）。 */
@@ -480,7 +606,7 @@ function focusNode(id) {
 }
 
 /** 边流光脉冲：沿「该节点 → 选中邻居」的边传播，到达端点再级联（穿越选中子图）。 */
-function startFlowFrom(id) {
+function startFlowFrom(id, backward = false) {
   const edges = state.edges;
   for (let i = 0; i < edges.length; i++) {
     const e = edges[i];
@@ -488,17 +614,20 @@ function startFlowFrom(id) {
     if (e.from === id && nodeSprites.has(e.to)) targetId = e.to;
     else if (e.to === id && nodeSprites.has(e.from)) targetId = e.from;
     if (!targetId || targetId === id) continue;
-    // 只有到达端点是「选中/高亮」才继续级联；否则仅让这条边亮一次
-    const cascade = targetId === selectedId || highlightIds.has(targetId);
-    animateFlowEdge(i, targetId, cascade);
+    // 只有到达端点是「选中/高亮/组选」才继续级联；否则仅让这条边亮一次
+    const cascade = targetId === selectedId || highlightIds.has(targetId) || groupIds.has(targetId);
+    animateFlowEdge(i, targetId, cascade, backward);
   }
 }
 
-function animateFlowEdge(idx, targetId, cascade) {
-  edgeFlow[idx] = 0;
+function animateFlowEdge(idx, targetId, cascade, backward) {
+  // backward = 反向流光（shift+右键）
+  const from = backward ? 1 : 0;
+  const to = backward ? 0 : 1;
+  edgeFlow[idx] = from;
   edgeMesh.instanceMatrix.needsUpdate = true;
   tween.add({
-    from: 0, to: 1, duration: 550, ease: sineInOut,
+    from, to, duration: 550, ease: sineInOut,
     onUpdate: (v) => {
       edgeFlow[idx] = v;
       edgeMesh.instanceMatrix.needsUpdate = true;
@@ -506,7 +635,7 @@ function animateFlowEdge(idx, targetId, cascade) {
     onEnd: () => {
       edgeFlow[idx] = -2;
       edgeMesh.instanceMatrix.needsUpdate = true;
-      if (cascade) startFlowFrom(targetId); // 级联到下一跳
+      if (cascade) startFlowFrom(targetId, backward); // 级联到下一跳
     },
   });
 }
@@ -574,6 +703,7 @@ function clearGraph() {
   selectedId = null;
   hoverId = null;
   highlightIds = new Set();
+  groupIds = new Set();
 }
 
 /** 把 data 并入当前图并补齐缺失对象/位置（增量，保留已有节点位置 → 供沉降动画）。 */
