@@ -29,10 +29,10 @@ let edgeMesh = null; // InstancedMesh（相机朝向带状边 + 流光）
 let edgeData = []; // {from,to} 与实例索引对齐
 let edgeFlow = new Float32Array(0); // 每实例 flow（-2 表示无流光）
 let state = { nodes: [], edges: [] };
-let selectedId = null;
+let selectedIds = new Set(); // 多选集合（对齐旧项目 nodesObj->selected）
 let hoverId = null;
 let highlightIds = new Set(); // 定位 Neo4j 节点时的命中高亮
-let groupIds = new Set(); // 组合键/维度选择的范围高亮
+let activeId = null; // 扩展/聚焦用的主选中（最近被选中/点中的）
 
 let layoutMode = "2d"; // 2d（默认，平移/缩放/绕Z）| 3d（轨道）
 let layoutRunning = true;
@@ -303,8 +303,8 @@ function updateLabelPositions() {
 /** 统一应用高亮/透明态：选中|高亮 → 提亮 alpha 1.0；悬停 → 微亮；其余 → 半透明 */
 function applyHighlights() {
   for (const [id, ent] of nodeSprites) {
-    const on = id === selectedId || id === hoverId || highlightIds.has(id) || groupIds.has(id);
-    if (id === selectedId || highlightIds.has(id) || groupIds.has(id)) {
+    const on = hoverId === id || highlightIds.has(id) || selectedIds.has(id);
+    if (highlightIds.has(id) || selectedIds.has(id)) {
       _c.setHex(ent.base).multiplyScalar(1.28);
       ent.sprite.material.color.copy(_c);
       ent.sprite.material.opacity = 1.0;
@@ -422,9 +422,9 @@ function selectConnectedComponent(id) {
       if (nb && !seen.has(nb)) { seen.add(nb); stack.push(nb); }
     }
   }
-  groupIds = seen;
-  selectNode(id);
-  applyHighlights();
+  selectedIds = seen;
+  activeId = id;
+  syncSelectionUI();
 }
 
 /** 选中若干跳内的邻居（数字键 5..9 + 单击 = 1..5 跳）。 */
@@ -441,9 +441,9 @@ function selectNeighbors(id, depth) {
     }
     frontier = next;
   }
-  groupIds = seen;
-  selectNode(id);
-  applyHighlights();
+  selectedIds = seen;
+  activeId = id;
+  syncSelectionUI();
 }
 
 /** 在代码查看器打开节点对应的源码文件（Shift+单击，尽力而为）。 */
@@ -477,15 +477,13 @@ function handleNodeClick(id, e) {
     // 同一节点 500ms 内第二次单击 → 双击聚焦（不切换，保持选中）
     lastClick.id = null;
     lastClick.time = 0;
-    selectNode(id);
+    selectOnly(id);
     focusNode(id);
     return;
   }
   lastClick.id = id;
   lastClick.time = now;
-  // 单击：切换选中（已选中再点 → 取消选中）
-  if (selectedId === id) selectNode(null);
-  else selectNode(id);
+  toggleSelect(id); // 单击：切换选中（多选，对齐旧项目）
 }
 
 function setupInteraction() {
@@ -615,7 +613,7 @@ function startFlowFrom(id, backward = false) {
     else if (e.to === id && nodeSprites.has(e.from)) targetId = e.from;
     if (!targetId || targetId === id) continue;
     // 只有到达端点是「选中/高亮/组选」才继续级联；否则仅让这条边亮一次
-    const cascade = targetId === selectedId || highlightIds.has(targetId) || groupIds.has(targetId);
+    const cascade = selectedIds.has(targetId) || highlightIds.has(targetId);
     animateFlowEdge(i, targetId, cascade, backward);
   }
 }
@@ -700,10 +698,10 @@ function clearGraph() {
   edgeData = [];
   edgeFlow = new Float32Array(0);
   state = { nodes: [], edges: [] };
-  selectedId = null;
+  selectedIds = new Set();
+  activeId = null;
   hoverId = null;
   highlightIds = new Set();
-  groupIds = new Set();
 }
 
 /** 把 data 并入当前图并补齐缺失对象/位置（增量，保留已有节点位置 → 供沉降动画）。 */
@@ -764,15 +762,49 @@ function renderResultRows(rows) {
   }
 }
 
-function selectNode(id) {
-  selectedId = id;
-  expandBtn.disabled = !id;
-  selEl.textContent = id ? `已选中: ${(nodesById.get(id) || {}).label || id}` : "未选中节点";
+function selectionLabels() {
+  if (selectedIds.size === 0) return "未选中节点";
+  if (selectedIds.size === 1) {
+    const id = activeId ?? selectedIds.values().next().value;
+    return `已选中: ${(nodesById.get(id) || {}).label || id}`;
+  }
+  return `已选中 ${selectedIds.size} 个节点`;
+}
+function syncSelectionUI() {
+  expandBtn.disabled = selectedIds.size === 0;
+  selEl.textContent = selectionLabels();
   applyHighlights();
+}
+/** 清空并选中单个节点（聚焦/定位落点）。 */
+function selectOnly(id) {
+  selectedIds = new Set(id == null ? [] : [id]);
+  activeId = id == null ? null : id;
+  syncSelectionUI();
+}
+/** 追加单个节点进多选（定位结果点击行）。 */
+function addSelect(id) {
+  if (id == null) return;
+  selectedIds.add(id);
+  activeId = id;
+  syncSelectionUI();
+}
+/** 切换单个节点的选中态（单击）。 */
+function toggleSelect(id) {
+  if (id == null) return;
+  if (selectedIds.has(id)) {
+    selectedIds.delete(id);
+    if (activeId === id) activeId = selectedIds.values().next().value ?? null;
+  } else {
+    selectedIds.add(id);
+    activeId = id;
+  }
+  syncSelectionUI();
 }
 
 async function expand() {
-  if (!selectedId) return;
+  if (!activeId) return;
+  if (!selectedIds.has(activeId)) activeId = selectedIds.values().next().value ?? null;
+  if (!activeId) return;
   errorEl.textContent = "";
   const project = projectSel.value;
   const dir = dirSel.value;
@@ -781,7 +813,7 @@ async function expand() {
     "RETURN a, r, b LIMIT 200";
   const url =
     `/api/graph/query?project=${encodeURIComponent(project)}` +
-    `&cypher=${encodeURIComponent(cypher)}&id=${encodeURIComponent(selectedId)}`;
+    `&cypher=${encodeURIComponent(cypher)}&id=${encodeURIComponent(activeId)}`;
   try {
     const res = await fetch(url);
     if (!res.ok) {
@@ -789,7 +821,7 @@ async function expand() {
       throw new Error(`${res.status}: ${body.slice(0, 200)}`);
     }
     const view = await res.json();
-    renderGraph(view, selectedId); // 增量并入，新节点在选中节点附近生成并沉降
+    renderGraph(view, activeId); // 增量并入，新节点在主选中节点附近生成并沉降
   } catch (err) {
     errorEl.textContent = `扩展失败: ${err instanceof Error ? err.message : err}`;
   }
@@ -1286,7 +1318,7 @@ function renderLocateMatches(matches, inView) {
     meta.textContent = parts.join(" · ");
     row.append(badge, name, meta);
     row.title = `${m.label} · ${m.name || ""}\n${m.signature || ""}\n${m.file}#${m.line}\nsymbol: ${m.symbol || ""}`;
-    row.addEventListener("click", () => selectNode(m.id));
+    row.addEventListener("click", () => addSelect(m.id));
     locateResultsEl.appendChild(row);
   }
 }
@@ -1327,7 +1359,7 @@ async function locate() {
     highlightFoundLines(data.matches);
     clearLocateBtn.disabled = false;
     if (data.matches.length > 0) {
-      selectNode(data.matches[0].id);
+      selectOnly(data.matches[0].id);
     }
   } catch (err) {
     locateResultsEl.innerHTML = `<div class='locate-empty'>定位失败: ${err instanceof Error ? err.message : err}</div>`;
@@ -1399,6 +1431,7 @@ codeProjectSel.addEventListener("change", () => {
 loadBtn.addEventListener("click", load);
 expandBtn.addEventListener("click", expand);
 resetBtn.addEventListener("click", () => {
-  selectedId = null;
+  selectedIds = new Set();
+  activeId = null;
   load();
 });
