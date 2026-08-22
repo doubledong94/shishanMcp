@@ -71,52 +71,79 @@ function kindColor(kind) {
   return KIND_COLORS[kind] ?? DEF_COLOR;
 }
 
-// 圆形贴片纹理（billboard 扁平圆形，中间实、边缘羽化到透明）
-const DISC_TEX = (() => {
-  const c = document.createElement("canvas");
-  c.width = c.height = 64;
-  const g = c.getContext("2d");
-  const r = g.createRadialGradient(32, 32, 0, 32, 32, 32);
-  r.addColorStop(0, "rgba(255,255,255,1)");
-  r.addColorStop(0.65, "rgba(255,255,255,0.9)");
-  r.addColorStop(1, "rgba(255,255,255,0)");
-  g.fillStyle = r;
-  g.fillRect(0, 0, 64, 64);
-  return new THREE.CanvasTexture(c);
-})();
-
-// 高亮圆环纹理（对齐旧项目选中节点的高亮盘：亮环围住贴片）
-const RING_TEX = (() => {
-  const c = document.createElement("canvas");
-  c.width = c.height = 64;
-  const g = c.getContext("2d");
-  g.clearRect(0, 0, 64, 64);
-  g.strokeStyle = "rgba(255,255,255,1)";
-  g.lineWidth = 7;
-  g.beginPath();
-  g.arc(32, 32, 26, 0, Math.PI * 2);
-  g.stroke();
-  return new THREE.CanvasTexture(c);
-})();
+// 节点 = 灰色圆盘 + 盘内纹样（对齐旧项目 Nodes）：
+// - 未选中灰 (0.5,0.5,0.5) alpha 0.3，选中亮灰 (0.9,0.9,0.9) alpha 1.0，悬停 color/alpha 各 +0.2
+// - 圆盘半径 0.7（length(uv)>0.7 → alpha 0），类型用盘内同环/网格纹样区分（非颜色）
+// 纹样直接烘焙进灰度贴图（白 = 原盘色，暗带 = 纹样下压 0.3），再用材质 color 乘上当前灰值。
+function makeGlyphTexture(style) {
+  const S = 128;
+  const cv = document.createElement("canvas");
+  cv.width = cv.height = S;
+  const ctx = cv.getContext("2d");
+  const img = ctx.createImageData(S, S);
+  const half = S / 2;
+  const band = (l) => (l > 0.6 || (l > 0.5 && l < 0.57) || (l > 0.3 && l < 0.37) || (l < 0.13)) ? 1 : 0;
+  for (let py = 0; py < S; py++) {
+    for (let px = 0; px < S; px++) {
+      const u = (px + 0.5) / half - 1;
+      const v = -((py + 0.5) / half - 1);
+      const l = Math.hypot(u, v);
+      let a = 0;
+      if (l > 0.7) a = 0;
+      else if (l > 0.68) a = (0.7 - l) / 0.02;
+      else a = 1;
+      let darken = 0;
+      if (a > 0) {
+        const lineX = () => { const x = Math.abs(u); return x > 0.55 || (x > 0.45 && x < 0.52) || (x > 0.25 && x < 0.32) || (x > 0.05 && x < 0.12); };
+        const lineY = () => { const y = Math.abs(v); return y > 0.55 || (y > 0.45 && y < 0.52) || (y > 0.25 && y < 0.32) || (y > 0.05 && y < 0.12); };
+        switch (style) {
+          case 1: if (l > 0.6) { } else if (l > 0.52) darken = 1; break; // 单环
+          case 3: darken = band(l); break; // 多环（三圈同心）
+          case 6: if (l > 0.6) darken = -1; break; // 外圈提亮
+          case 8: if (l > 0.45 && l < 0.65) darken = 1; break; // 中环带（字段/匿名）
+          case 2: if (lineX() || lineY()) darken = 1; break; // 十字网格（方法/条件）
+          case 5: if (lineX() && lineY()) darken = 1; break; // 细格点（参数/返回）
+          default: darken = 0;
+        }
+      }
+      const idx = (py * S + px) * 4;
+      const c = 255 * (darken < 0 ? 1.3 : 1 - darken * 0.3);
+      img.data[idx] = img.data[idx + 1] = img.data[idx + 2] = Math.round(Math.max(0, Math.min(255, c)));
+      img.data[idx + 3] = Math.round(a * 255);
+    }
+  }
+  ctx.putImageData(img, 0, 0);
+  return new THREE.CanvasTexture(cv);
+}
+const GLYPH_TEX = new Map();
+function glyphTex(style) {
+  if (!GLYPH_TEX.has(style)) GLYPH_TEX.set(style, makeGlyphTexture(style));
+  return GLYPH_TEX.get(style);
+}
+/** 节点 kind → 盘内纹样（松散映射旧项目 styled1..styled8 语义） */
+function styleForKind(kind) {
+  switch (kind) {
+    case "Symbol": return 3; // scip 引用 → 多环
+    case "Method": case "Condition": return 2; // 方法/条件 → 十字网格
+    case "CalledMethod": return 1; // 调用 → 单环
+    case "Value": return 5; // 参数/返回 → 细格
+    case "Field": return 8; // 字段 → 中环带
+    case "Class": return 6; // 类 → 外圈提亮
+    default: return 0; // File/Project/Result 等 → 平板
+  }
+}
 
 function makeNodeSprite(id) {
+  const n = nodesById.get(id);
   const mat = new THREE.SpriteMaterial({
-    map: DISC_TEX,
+    map: glyphTex(styleForKind(n ? n.kind : "")),
     transparent: true,
     depthWrite: false,
-    color: kindColor(nodesById.get(id).kind),
+    color: 0x808080, // 基准灰，逐帧按选中/悬停设为 0.5/0.9
   });
   const sprite = new THREE.Sprite(mat);
   sprite.userData.nodeId = id;
   sprite.scale.set(2, 2, 1);
-  // 高亮圆环作为贴片子对象，随其移动/缩放/朝向相机；默认隐藏
-  const ring = new THREE.Sprite(
-    new THREE.SpriteMaterial({ map: RING_TEX, transparent: true, depthWrite: false, color: 0xe6edf3 }),
-  );
-  ring.visible = false;
-  ring.scale.set(2.7, 2.7, 1);
-  sprite.add(ring);
-  sprite.ring = ring;
   return sprite;
 }
 
@@ -190,8 +217,8 @@ function rebuildEdges() {
   edgeMesh = new THREE.InstancedMesh(geo, mat, count);
   const color = new THREE.Color();
   edgeData.forEach((e, i) => {
-    const src = nodesById.get(e.from);
-    color.setHex(kindColor(src ? src.kind : DEF_COLOR));
+    // 节点为灰盘，边取灰（对齐旧项目 FlowLine 取端点节点灰）
+    color.setHex(0x8b949e);
     edgeMesh.setColorAt(i, color);
   });
   graphGroup.add(edgeMesh);
@@ -322,32 +349,17 @@ function updateLabelPositions() {
   }
 }
 
-/** 统一应用高亮/透明态：选中|命中 → 高亮圆环 + 不透明 + 提亮；悬停 → 微亮；其余 → 半透明弱化 */
+/** 应用灰盘明暗/透明度（对齐旧项目 Nodes：未选中灰0.5·alpha0.3，选中亮灰0.9·alpha1.0，悬停 +0.2） */
 function applyHighlights() {
   for (const [id, ent] of nodeSprites) {
-    const on = hoverId === id || highlightIds.has(id) || selectedIds.has(id);
-    const ring = ent.sprite.ring;
-    if (highlightIds.has(id) || selectedIds.has(id)) {
-      // 选中/命中：高亮圆环 + 不透明 + 明显提亮（对齐旧项目 selected 高亮盘）
-      _c.setHex(ent.base).multiplyScalar(1.35);
-      ent.sprite.material.color.copy(_c);
-      ent.sprite.material.opacity = 1.0;
-      ring.visible = true;
-      const rs = ent.sprite.scale.x;
-      ring.scale.set(rs * 1.4, rs * 1.4, 1);
-    } else if (id === hoverId) {
-      _c.setHex(ent.base).multiplyScalar(1.14);
-      ent.sprite.material.color.copy(_c);
-      ent.sprite.material.opacity = 0.92;
-      ring.visible = false;
-    } else {
-      // 未选中：保持类型色但明显半透明、略弱
-      _c.setHex(ent.base).multiplyScalar(0.85);
-      ent.sprite.material.color.copy(_c);
-      ent.sprite.material.opacity = 0.28;
-      ring.visible = false;
-    }
-    ent.label.visible = on;
+    const sel = highlightIds.has(id) || selectedIds.has(id);
+    const hov = hoverId === id;
+    let g = sel ? 0.9 : 0.5;
+    if (hov) g = Math.min(1, g + 0.2);
+    _c.setRGB(g, g, g);
+    ent.sprite.material.color.copy(_c);
+    ent.sprite.material.opacity = Math.min(1, (sel ? 1.0 : 0.3) + (hov ? 0.2 : 0));
+    ent.label.visible = sel || hov;
   }
 }
 
@@ -758,7 +770,7 @@ function renderGraph(data, seedId) {
     label.visible = false;
     graphGroup.add(sprite);
     graphGroup.add(label);
-    nodeSprites.set(n.id, { sprite, label, base: kindColor(n.kind) });
+    nodeSprites.set(n.id, { sprite, label });
   }
 
   rebuildEdges();
