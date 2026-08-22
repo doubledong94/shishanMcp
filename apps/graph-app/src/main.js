@@ -2,7 +2,7 @@ import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { createTweenEngine, sineInOut } from "./anim.js";
 
-const BUILD = "e62b8be";
+const BUILD = "2026-08-22 20:28:13"; // 构建时间（本地，精确到秒）
 const app = document.getElementById("app");
 const projectSel = document.getElementById("project");
 const viewSel = document.getElementById("view");
@@ -507,6 +507,7 @@ function openNodeSource(id) {
 
 /** 单击/组合键 统一入口：双击态机 + 组合键 + 切换选中。空点 = 无操作（对齐旧项目）。 */
 function handleNodeClick(id, e) {
+  console.log(`[DBG] click id=${id} kind=${(nodesById.get(id) || {}).kind} ctrl=${!!e.ctrlKey} shift=${!!e.shiftKey} inNodeSprites=${nodeSprites.has(id)}`);
   if (id == null) {
     lastClick.id = null;
     lastClick.time = 0;
@@ -830,6 +831,23 @@ function syncSelectionUI() {
   expandBtn.disabled = selectedIds.size === 0;
   selEl.textContent = selectionLabels();
   applyHighlights();
+  dbgSelection("sync");
+}
+
+/* [DBG] 选中后打印每个选中节点的最终材质/透明度，便于排查选中无视觉变化 */
+function dbgSelection(tag) {
+  const lines = [];
+  for (const id of selectedIds) {
+    const ent = nodeSprites.get(id);
+    if (!ent) { lines.push(`  sel=${id} 不在nodeSprites!`); continue; }
+    const m = ent.sprite.material;
+    lines.push(
+      `  sel=${id} kind=${(nodesById.get(id) || {}).kind} ` +
+      `color=(${m.color.r.toFixed(2)},${m.color.g.toFixed(2)},${m.color.b.toFixed(2)}) ` +
+      `opacity=${m.opacity.toFixed(2)} label.visible=${ent.label.visible}`,
+    );
+  }
+  console.log(`[DBG] ${tag} selectedIds.size=${selectedIds.size}\n` + lines.join("\n"));
 }
 /** 清空并选中单个节点（聚焦/定位落点）。 */
 function selectOnly(id) {
