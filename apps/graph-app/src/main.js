@@ -85,6 +85,20 @@ const DISC_TEX = (() => {
   return new THREE.CanvasTexture(c);
 })();
 
+// 高亮圆环纹理（对齐旧项目选中节点的高亮盘：亮环围住贴片）
+const RING_TEX = (() => {
+  const c = document.createElement("canvas");
+  c.width = c.height = 64;
+  const g = c.getContext("2d");
+  g.clearRect(0, 0, 64, 64);
+  g.strokeStyle = "rgba(255,255,255,1)";
+  g.lineWidth = 7;
+  g.beginPath();
+  g.arc(32, 32, 26, 0, Math.PI * 2);
+  g.stroke();
+  return new THREE.CanvasTexture(c);
+})();
+
 function makeNodeSprite(id) {
   const mat = new THREE.SpriteMaterial({
     map: DISC_TEX,
@@ -95,6 +109,14 @@ function makeNodeSprite(id) {
   const sprite = new THREE.Sprite(mat);
   sprite.userData.nodeId = id;
   sprite.scale.set(2, 2, 1);
+  // 高亮圆环作为贴片子对象，随其移动/缩放/朝向相机；默认隐藏
+  const ring = new THREE.Sprite(
+    new THREE.SpriteMaterial({ map: RING_TEX, transparent: true, depthWrite: false, color: 0xe6edf3 }),
+  );
+  ring.visible = false;
+  ring.scale.set(2.7, 2.7, 1);
+  sprite.add(ring);
+  sprite.ring = ring;
   return sprite;
 }
 
@@ -300,21 +322,30 @@ function updateLabelPositions() {
   }
 }
 
-/** 统一应用高亮/透明态：选中|高亮 → 提亮 alpha 1.0；悬停 → 微亮；其余 → 半透明 */
+/** 统一应用高亮/透明态：选中|命中 → 高亮圆环 + 不透明 + 提亮；悬停 → 微亮；其余 → 半透明弱化 */
 function applyHighlights() {
   for (const [id, ent] of nodeSprites) {
     const on = hoverId === id || highlightIds.has(id) || selectedIds.has(id);
+    const ring = ent.sprite.ring;
     if (highlightIds.has(id) || selectedIds.has(id)) {
-      _c.setHex(ent.base).multiplyScalar(1.28);
+      // 选中/命中：高亮圆环 + 不透明 + 明显提亮（对齐旧项目 selected 高亮盘）
+      _c.setHex(ent.base).multiplyScalar(1.35);
       ent.sprite.material.color.copy(_c);
       ent.sprite.material.opacity = 1.0;
+      ring.visible = true;
+      const rs = ent.sprite.scale.x;
+      ring.scale.set(rs * 1.4, rs * 1.4, 1);
     } else if (id === hoverId) {
       _c.setHex(ent.base).multiplyScalar(1.14);
       ent.sprite.material.color.copy(_c);
       ent.sprite.material.opacity = 0.92;
+      ring.visible = false;
     } else {
-      ent.sprite.material.color.setHex(ent.base);
-      ent.sprite.material.opacity = 0.35;
+      // 未选中：保持类型色但明显半透明、略弱
+      _c.setHex(ent.base).multiplyScalar(0.85);
+      ent.sprite.material.color.copy(_c);
+      ent.sprite.material.opacity = 0.28;
+      ring.visible = false;
     }
     ent.label.visible = on;
   }
