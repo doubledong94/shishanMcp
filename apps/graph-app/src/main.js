@@ -2,7 +2,7 @@ import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { createTweenEngine, sineInOut } from "./anim.js";
 
-const BUILD = "2026-08-23 10:45:23"; // 构建时间（本地，精确到秒）
+const BUILD = "2026-08-23 10:56:22"; // 构建时间（本地，精确到秒）
 const app = document.getElementById("app");
 const projectSel = document.getElementById("project");
 const viewSel = document.getElementById("view");
@@ -355,11 +355,11 @@ function applyHighlights() {
   for (const [id, ent] of nodeSprites) {
     const sel = highlightIds.has(id) || selectedIds.has(id);
     const hov = hoverId === id;
-    let g = sel ? 0.9 : 0.5;
-    if (hov) g = Math.min(1, g + 0.2);
+    // 加大选中/未选中反差：选中亮灰0.95实心，未选中暗灰0.38+高透明
+    const g = sel ? (hov ? 1.0 : 0.95) : (hov ? 0.55 : 0.38);
     _c.setRGB(g, g, g);
     ent.sprite.material.color.copy(_c);
-    ent.sprite.material.opacity = Math.min(1, (sel ? 1.0 : 0.3) + (hov ? 0.2 : 0));
+    ent.sprite.material.opacity = sel ? 1.0 : (hov ? 0.5 : 0.22);
     ent.label.visible = sel || hov;
   }
 }
