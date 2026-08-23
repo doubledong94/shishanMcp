@@ -2,7 +2,7 @@ import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { createTweenEngine, sineInOut } from "./anim.js";
 
-const BUILD = "2026-08-23 12:56:05"; // 构建时间（本地，精确到秒）
+const BUILD = "2026-08-23 13:33:54"; // 构建时间（本地，精确到秒）
 const app = document.getElementById("app");
 const projectSel = document.getElementById("project");
 const viewSel = document.getElementById("view");
@@ -774,11 +774,17 @@ function animate(now) {
   // [DBG] 心跳：每秒打一次，确认渲染循环活着
   if (__frame % 60 === 0) {
     console.log(`[DBG] tick frame=${__frame} sprites=${nodeSprites.size} edges=${edgeData.length} selected=${selectedIds.size}`);
-    // [DBG] 读屏幕画布上当前主选中节点的真实像素（对照离屏读回，判断屏幕是否更新）
+    // [DBG] 读屏幕画布像素：同时取「选中」和「未选中」各一个节点做对比
     const __aid = activeId ?? selectedIds.values().next().value ?? (state.nodes[0] && state.nodes[0].id);
     if (__aid && nodeSprites.has(__aid)) {
-      const sp = readScreenPixel(__aid);
-      if (sp) console.log(`[DBG] screenPixel(${__aid}) = [${sp.join(",")}]`);
+      const ss = readScreenPixel(__aid);
+      if (ss) console.log(`[DBG] screenPixel(选中 ${__aid}) = [${ss.join(",")}]`);
+    }
+    let __un = null;
+    for (const n of state.nodes) if (!selectedIds.has(n.id)) { __un = n.id; break; }
+    if (__un && nodeSprites.has(__un)) {
+      const ss = readScreenPixel(__un);
+      if (ss) console.log(`[DBG] screenPixel(未选中 ${__un}) = [${ss.join(",")}]`);
     }
   }
 }
