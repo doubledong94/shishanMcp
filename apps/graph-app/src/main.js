@@ -2,7 +2,7 @@ import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { createTweenEngine, sineInOut } from "./anim.js";
 
-const BUILD = "2026-08-22 21:26:14"; // 构建时间（本地，精确到秒）
+const BUILD = "2026-08-23 10:31:47"; // 构建时间（本地，精确到秒）
 const app = document.getElementById("app");
 const projectSel = document.getElementById("project");
 const viewSel = document.getElementById("view");
@@ -863,15 +863,25 @@ function dbgSelection(tag) {
     );
   }
   console.log(`[DBG] ${tag} selectedIds.size=${selectedIds.size}\n` + lines.join("\n"));
-  // [DBG] 读取选中节点的实际渲染像素（离屏渲染后读回），判断材质是否真的画出来
-  if (selectedIds.size > 0) {
-    const id = activeId ?? selectedIds.values().next().value;
-    const px = readNodePixel(id);
-    if (px) console.log(`[DBG] renderedPixel(${id}) = [${px.join(",")}]`);
+  // [DBG] 同时读「一个选中」和「一个未选中」节点的实际渲染像素，看亮暗对比
+  if (state.nodes.length > 0) {
+    const selId = activeId ?? selectedIds.values().next().value;
+    const selNode = selId && nodeSprites.has(selId) ? selId : null;
+    // 取一个未选中节点
+    let unselId = null;
+    for (const n of state.nodes) if (!selectedIds.has(n.id) && nodeSprites.has(n.id)) { unselId = n.id; break; }
+    if (selNode) {
+      const px = readNodePixel(selNode);
+      if (px) console.log(`[DBG] renderedPixel(选中 ${selNode}) = [${px.join(",")}]`);
+    }
+    if (unselId) {
+      const px = readNodePixel(unselId);
+      if (px) console.log(`[DBG] renderedPixel(未选中 ${unselId}) = [${px.join(",")}]`);
+    }
   }
 }
 
-/** [DBG] 把场景渲到离屏纹理，读某节点屏幕位置的真实 RGBA */
+/** [DBG] 把场景渲到离屏纹理，在节点屏幕位置采 3x3 取最亮 RGBA（抗布局漂移误采） */
 function readNodePixel(id) {
   const sp = nodeSprites.get(id);
   if (!sp) return null;
@@ -881,12 +891,23 @@ function readNodePixel(id) {
   renderer.setRenderTarget(rt);
   renderer.render(scene, camera);
   const p = sp.sprite.getWorldPosition(new THREE.Vector3()).project(camera);
-  const sx = Math.max(0, Math.min(W - 1, Math.floor((p.x * 0.5 + 0.5) * W)));
-  const sy = Math.max(0, Math.min(H - 1, Math.floor((-p.y * 0.5 + 0.5) * H)));
-  const buf = new Uint8Array(4);
-  renderer.readRenderTargetPixels(rt, sx, H - 1 - sy, 1, 1, buf);
+  let sx0 = Math.floor((p.x * 0.5 + 0.5) * W);
+  let sy0 = Math.floor((-p.y * 0.5 + 0.5) * H);
+  const buf = new Uint8Array(4 * 9);
+  // 读 3x3 块（含目标点）
+  const bx = Math.max(0, Math.min(W - 3, sx0 - 1));
+  const by = Math.max(0, Math.min(H - 3, sy0 - 1));
+  renderer.readRenderTargetPixels(rt, bx, H - by - 3, 3, 3, buf);
   renderer.setRenderTarget(null);
   rt.dispose();
+  let best = [0, 0, 0, 0];
+  let bestLum = -1;
+  for (let i = 0; i < 9; i++) {
+    const r = buf[i * 4], g = buf[i * 4 + 1], b = buf[i * 4 + 2], a = buf[i * 4 + 3];
+    const lum = r + g + b;
+    if (lum > bestLum) { bestLum = lum; best = [r, g, b, a]; }
+  }
+  return best;
   return Array.from(buf);
 }
 /** 清空并选中单个节点（聚焦/定位落点）。 */
