@@ -2,7 +2,7 @@ import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { createTweenEngine, sineInOut } from "./anim.js";
 
-const BUILD = "2026-08-23 10:31:47"; // 构建时间（本地，精确到秒）
+const BUILD = "2026-08-23 10:45:23"; // 构建时间（本地，精确到秒）
 const app = document.getElementById("app");
 const projectSel = document.getElementById("project");
 const viewSel = document.getElementById("view");
@@ -1040,6 +1040,23 @@ async function load() {
 
 initThree();
 document.getElementById("build").textContent = `build ${BUILD}`;
+
+// [DBG] 自动自测：?autopick=1 时加载后自动停布局并选中第一个节点，触发像素对比日志
+const __autopick = new URLSearchParams(location.search).has("autopick");
+if (__autopick) {
+  setTimeout(() => {
+    if (nodeSprites.size > 0) {
+      layoutRunning = false;
+      const first = state.nodes[0].id;
+      selectOnly(first);
+      setTimeout(() => {
+        console.log(`[DBG] AUTOPICK done first=${first} sprites=${nodeSprites.size} total=${state.nodes.length}`);
+      }, 300);
+    } else {
+      setTimeout(() => console.log("[DBG] AUTOPICK no nodes yet"), 2000);
+    }
+  }, 4000);
+}
 
 // [DBG] 自动把 [DBG] 日志上报到后端 /api/graph/dbglog，方便读取排查
 (() => {
