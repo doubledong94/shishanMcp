@@ -2,7 +2,7 @@ import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { createTweenEngine, sineInOut } from "./anim.js";
 
-const BUILD = "2026-08-23 13:33:54"; // 构建时间（本地，精确到秒）
+const BUILD = "2026-08-23 14:34:51"; // 构建时间（本地，精确到秒）
 const app = document.getElementById("app");
 const projectSel = document.getElementById("project");
 const viewSel = document.getElementById("view");
@@ -763,14 +763,13 @@ function animate(now) {
     updateEdgeMatrices();
     cameraForMode();
     if (layoutMode === "3d") controls.update();
+    renderer.render(scene, camera); // 关键：渲染也包进 try，出错打日志不冻结画布
   } catch (err) {
-    // [DBG] 抓出每帧更新里的异常：不再吞掉、render 照常跑；首次出错打印栈
     if (!__frameErrShown) {
       __frameErrShown = true;
-      console.error("[DBG][ERROR] animate update threw:", err, err && err.stack);
+      console.log("[DBG][FRAME-ERR] " + (err && err.stack ? err.stack : err));
     }
   }
-  renderer.render(scene, camera);
   // [DBG] 心跳：每秒打一次，确认渲染循环活着
   if (__frame % 60 === 0) {
     console.log(`[DBG] tick frame=${__frame} sprites=${nodeSprites.size} edges=${edgeData.length} selected=${selectedIds.size}`);
