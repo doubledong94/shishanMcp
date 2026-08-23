@@ -2,7 +2,7 @@ import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { createTweenEngine, sineInOut } from "./anim.js";
 
-const BUILD = "2026-08-23 10:56:22"; // 构建时间（本地，精确到秒）
+const BUILD = "2026-08-23 11:15:15"; // 构建时间（本地，精确到秒）
 const app = document.getElementById("app");
 const projectSel = document.getElementById("project");
 const viewSel = document.getElementById("view");
@@ -76,7 +76,9 @@ function kindColor(kind) {
 // - 未选中灰 (0.5,0.5,0.5) alpha 0.3，选中亮灰 (0.9,0.9,0.9) alpha 1.0，悬停 color/alpha 各 +0.2
 // - 圆盘半径 0.7（length(uv)>0.7 → alpha 0），类型用盘内同环/网格纹样区分（非颜色）
 // 纹样直接烘焙进灰度贴图（白 = 原盘色，暗带 = 纹样下压 0.3），再用材质 color 乘上当前灰值。
-function makeGlyphTexture(style) {
+/** 生成节点贴图：把「灰阶亮度 gray + 透明度 texAlpha + 盘内纹样」直接烘焙进贴图，
+ *  不依赖 material.color/opacity uniform（有浏览器不应用这两个 uniform，导致节点恒亮）。 */
+function makeGlyphTexture(style, gray, texAlpha) {
   const S = 128;
   const cv = document.createElement("canvas");
   cv.width = cv.height = S;
@@ -108,18 +110,19 @@ function makeGlyphTexture(style) {
         }
       }
       const idx = (py * S + px) * 4;
-      const c = 255 * (darken < 0 ? 1.3 : 1 - darken * 0.3);
+      const c = 255 * gray * (darken < 0 ? 1.3 : 1 - darken * 0.3);
       img.data[idx] = img.data[idx + 1] = img.data[idx + 2] = Math.round(Math.max(0, Math.min(255, c)));
-      img.data[idx + 3] = Math.round(a * 255);
+      img.data[idx + 3] = Math.round(a * texAlpha * 255);
     }
   }
   ctx.putImageData(img, 0, 0);
   return new THREE.CanvasTexture(cv);
 }
 const GLYPH_TEX = new Map();
-function glyphTex(style) {
-  if (!GLYPH_TEX.has(style)) GLYPH_TEX.set(style, makeGlyphTexture(style));
-  return GLYPH_TEX.get(style);
+function glyphTex(style, gray, texAlpha) {
+  const key = `${style}:${gray.toFixed(3)}:${texAlpha.toFixed(2)}`;
+  if (!GLYPH_TEX.has(key)) GLYPH_TEX.set(key, makeGlyphTexture(style, gray, texAlpha));
+  return GLYPH_TEX.get(key);
 }
 /** 节点 kind → 盘内纹样（松散映射旧项目 styled1..styled8 语义） */
 function styleForKind(kind) {
@@ -134,13 +137,22 @@ function styleForKind(kind) {
   }
 }
 
+/** 明暗/透明度相关常量：烘焙进贴图，绕开 color/opacity uniform */
+const NODE_STYLE = {
+  UNSEL: { gray: 0.38, alpha: 0.22 },
+  HOVER: { gray: 0.55, alpha: 0.5 },
+  SEL:   { gray: 0.95, alpha: 1.0 },
+  SELHOV:{ gray: 1.0,  alpha: 1.0 },
+};
+
 function makeNodeSprite(id) {
   const n = nodesById.get(id);
+  const st = NODE_STYLE.UNSEL;
   const mat = new THREE.SpriteMaterial({
-    map: glyphTex(styleForKind(n ? n.kind : "")),
+    map: glyphTex(styleForKind(n ? n.kind : ""), st.gray, st.alpha),
     transparent: true,
     depthWrite: false,
-    color: 0x808080, // 基准灰，逐帧按选中/悬停设为 0.5/0.9
+    color: 0xffffff, // 恒白：一切明暗已烘焙进贴图
   });
   const sprite = new THREE.Sprite(mat);
   sprite.userData.nodeId = id;
@@ -352,14 +364,19 @@ function updateLabelPositions() {
 
 /** 应用灰盘明暗/透明度（对齐旧项目 Nodes：未选中灰0.5·alpha0.3，选中亮灰0.9·alpha1.0，悬停 +0.2） */
 function applyHighlights() {
+  const n = nodesById;
   for (const [id, ent] of nodeSprites) {
     const sel = highlightIds.has(id) || selectedIds.has(id);
     const hov = hoverId === id;
-    // 加大选中/未选中反差：选中亮灰0.95实心，未选中暗灰0.38+高透明
-    const g = sel ? (hov ? 1.0 : 0.95) : (hov ? 0.55 : 0.38);
-    _c.setRGB(g, g, g);
-    ent.sprite.material.color.copy(_c);
-    ent.sprite.material.opacity = sel ? 1.0 : (hov ? 0.5 : 0.22);
+    const st = sel ? (hov ? NODE_STYLE.SELHOV : NODE_STYLE.SEL) : (hov ? NODE_STYLE.HOVER : NODE_STYLE.UNSEL);
+    // 直接切换贴图（明暗+透明度已烘焙），不依赖 material.color/opacity uniform
+    const tex = glyphTex(styleForKind((n.get(id) || {}).kind), st.gray, st.alpha);
+    if (ent.sprite.material.map !== tex) {
+      ent.sprite.material.map = tex;
+      ent.sprite.material.needsUpdate = true;
+    }
+    ent.sprite.material.color.setHex(0xffffff);
+    ent.sprite.material.opacity = 1.0;
     ent.label.visible = sel || hov;
   }
 }
