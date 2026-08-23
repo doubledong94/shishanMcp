@@ -2,7 +2,7 @@ import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { createTweenEngine, sineInOut } from "./anim.js";
 
-const BUILD = "2026-08-23 14:34:51"; // 构建时间（本地，精确到秒）
+const BUILD = "2026-08-23 17:06:19"; // 构建时间（本地，精确到秒）
 const app = document.getElementById("app");
 const projectSel = document.getElementById("project");
 const viewSel = document.getElementById("view");
@@ -23,7 +23,11 @@ const tween = createTweenEngine();
 
 let scene, camera, renderer, controls; // controls = OrbitControls（仅 3D 模式使用）
 let graphGroup;
-let nodeSprites = new Map(); // id -> { sprite, label, base }
+let nodeMesh = null; // InstancedMesh（每实例一个实心圆盘，每实例颜色区分选中/悬停）
+let instNode = []; // 实例索引 -> node id
+let nodeIx = new Map(); // node id -> 实例索引
+let nodeScale = new Map(); // node id -> 半径倍率
+let nodeLabels = new Map(); // node id -> Sprite（仅选中/悬停显示）
 let nodesById = new Map(); // id -> node
 let nodePos = new Map(); // id -> THREE.Vector3
 let edgeMesh = null; // InstancedMesh（相机朝向带状边 + 流光）
@@ -145,19 +149,66 @@ const NODE_STYLE = {
   SELHOV:{ gray: 1.0,  alpha: 1.0 },
 };
 
-function makeNodeSprite(id) {
-  const n = nodesById.get(id);
-  const st = NODE_STYLE.UNSEL;
-  const mat = new THREE.SpriteMaterial({
-    map: glyphTex(styleForKind(n ? n.kind : ""), st.gray, st.alpha),
-    transparent: true,
-    depthWrite: false,
-    color: 0xffffff, // 恒白：一切明暗已烘焙进贴图
-  });
-  const sprite = new THREE.Sprite(mat);
-  sprite.userData.nodeId = id;
-  sprite.scale.set(2, 2, 1);
-  return sprite;
+/** 重新构建节点 InstancedMesh（不透明实心圆盘 + 每实例颜色，绕开 Sprite/uniform 路径） */
+function rebuildNodes() {
+  const ids = state.nodes.map((n) => n.id);
+  if (nodeMesh) { graphGroup.remove(nodeMesh); nodeMesh.geometry.dispose(); nodeMesh.material.dispose(); nodeMesh = null; }
+  nodeLabels.forEach((l) => graphGroup.remove(l));
+  nodeLabels.clear();
+  instNode = ids;
+  nodeIx.clear();
+  ids.forEach((id, i) => nodeIx.set(id, i));
+  if (ids.length === 0) return;
+  const geo = new THREE.CircleGeometry(1, 24);
+  const mat = new THREE.MeshBasicMaterial({ color: 0xffffff }); // 每实例颜色覆盖
+  nodeMesh = new THREE.InstancedMesh(geo, mat, ids.length);
+  const c = new THREE.Color(0.3, 0.3, 0.3);
+  for (let i = 0; i < ids.length; i++) {
+    nodeScale.set(ids[i], nodeScale.get(ids[i]) || 1);
+    nodeMesh.setColorAt(i, c);
+  }
+  graphGroup.add(nodeMesh);
+  // 标签（仅选中/悬停显示）
+  for (const n of state.nodes) {
+    const lab = makeLabel(n.label);
+    lab.visible = false;
+    nodeLabels.set(n.id, lab);
+    graphGroup.add(lab);
+  }
+  updateNodePositions();
+}
+
+/** 每帧：把 nodePos + nodeScale 写进实例矩阵 */
+function updateNodePositions() {
+  if (!nodeMesh) return;
+  const dn = new THREE.Object3D();
+  for (let i = 0; i < instNode.length; i++) {
+    const p = nodePos.get(instNode[i]);
+    if (!p) continue;
+    const s = nodeScale.get(instNode[i]) || 1;
+    dn.position.copy(p);
+    dn.scale.set(s, s, 1);
+    dn.updateMatrix();
+    nodeMesh.setMatrixAt(i, dn.matrix);
+  }
+  nodeMesh.instanceMatrix.needsUpdate = true;
+}
+
+/** 选中/悬停 → 每实例颜色（不透明实心盘，未选中暗灰、选中亮灰） */
+function updateNodeColors() {
+  if (!nodeMesh) return;
+  const c = new THREE.Color();
+  for (let i = 0; i < instNode.length; i++) {
+    const id = instNode[i];
+    const sel = selectedIds.has(id) || highlightIds.has(id);
+    const hov = hoverId === id;
+    const g = sel ? (hov ? 1.0 : 0.9) : (hov ? 0.55 : 0.28);
+    c.setRGB(g, g, g);
+    nodeMesh.setColorAt(i, c);
+    const lab = nodeLabels.get(id);
+    if (lab) lab.visible = sel || hov;
+  }
+  if (nodeMesh.instanceColor) nodeMesh.instanceColor.needsUpdate = true;
 }
 
 /** 标签只显示在选中/悬停节点上 */
@@ -323,11 +374,7 @@ function stepLayout(dt) {
     v.z -= cz * k * LAYOUT.center;
   }
   if (layoutMode === "2d") for (const v of nodePos.values()) v.z = 0;
-  // 同步对象位置
-  for (const [id, v] of nodePos) {
-    const ent = nodeSprites.get(id);
-    if (ent) ent.sprite.position.copy(v);
-  }
+  updateNodePositions(); // 布局每帧更新实例矩阵
 }
 
 // ---------- 密度自适应大小（移植 scaleByDistance：密处小、疏处大） ----------
@@ -349,36 +396,23 @@ function updateScaleByDistance() {
     const node = nodes[i];
     const isRoot = node.kind === "Project" || node.kind === "Result";
     const s = isRoot ? 3.6 : THREE.MathUtils.clamp(2.4 * Math.sqrt(dist * 0.6), 1.0, 3.2);
-    const ent = nodeSprites.get(node.id);
-    if (ent) ent.sprite.scale.set(s, s, 1);
+    nodeScale.set(node.id, s);
   }
+  updateNodePositions();
 }
 
 function updateLabelPositions() {
-  for (const [id, ent] of nodeSprites) {
+  for (const [id, lab] of nodeLabels) {
     const v = nodePos.get(id);
     if (!v) continue;
-    ent.label.position.copy(v).add(_v1.set(0, ent.sprite.scale.y * 0.8, 0));
+    const s = nodeScale.get(id) || 1;
+    lab.position.copy(v).add(_v1.set(0, s * 0.9, 0));
   }
 }
 
 /** 应用灰盘明暗/透明度（对齐旧项目 Nodes：未选中灰0.5·alpha0.3，选中亮灰0.9·alpha1.0，悬停 +0.2） */
 function applyHighlights() {
-  const n = nodesById;
-  for (const [id, ent] of nodeSprites) {
-    const sel = highlightIds.has(id) || selectedIds.has(id);
-    const hov = hoverId === id;
-    const st = sel ? (hov ? NODE_STYLE.SELHOV : NODE_STYLE.SEL) : (hov ? NODE_STYLE.HOVER : NODE_STYLE.UNSEL);
-    // 直接切换贴图（明暗+透明度已烘焙），不依赖 material.color/opacity uniform
-    const tex = glyphTex(styleForKind((n.get(id) || {}).kind), st.gray, st.alpha);
-    if (ent.sprite.material.map !== tex) {
-      ent.sprite.material.map = tex;
-      ent.sprite.material.needsUpdate = true;
-    }
-    ent.sprite.material.color.setHex(0xffffff);
-    ent.sprite.material.opacity = 1.0;
-    ent.label.visible = sel || hov;
-  }
+  updateNodeColors();
 }
 
 // ---------- 相机 / 控制器（2D 平移缩放 + 3D 轨道） ----------
@@ -415,15 +449,15 @@ function centerView() {
 
 // ---------- 探针 / 交互 ----------
 function pickNode(clientX, clientY) {
+  if (!nodeMesh) return null;
   const rect = renderer.domElement.getBoundingClientRect();
   pointer.x = ((clientX - rect.left) / rect.width) * 2 - 1;
   pointer.y = -((clientY - rect.top) / rect.height) * 2 + 1;
   raycaster.setFromCamera(pointer, camera);
-  const sprites = [];
-  nodeSprites.forEach((ent) => sprites.push(ent.sprite));
-  const hits = raycaster.intersectObjects(sprites, false);
-  const hit = hits.find((h) => h.object.userData && h.object.userData.nodeId);
-  return hit ? hit.object.userData.nodeId : null;
+  const hits = raycaster.intersectObject(nodeMesh, false);
+  if (!hits.length) return null;
+  const ix = hits[0].instanceId;
+  return ix != null && ix < instNode.length ? instNode[ix] : null;
 }
 
 const drag = { active: false, button: -1, startX: 0, startY: 0, lastX: 0, lastY: 0, moved: false };
@@ -524,7 +558,7 @@ function openNodeSource(id) {
 
 /** 单击/组合键 统一入口：双击态机 + 组合键 + 切换选中。空点 = 无操作（对齐旧项目）。 */
 function handleNodeClick(id, e) {
-  console.log(`[DBG] click id=${id} kind=${(nodesById.get(id) || {}).kind} ctrl=${!!e.ctrlKey} shift=${!!e.shiftKey} inNodeSprites=${nodeSprites.has(id)}`);
+  console.log(`[DBG] click id=${id} kind=${(nodesById.get(id) || {}).kind} inNodeIx=${nodeIx.has(id)}`);
   if (id == null) {
     lastClick.id = null;
     lastClick.time = 0;
@@ -683,8 +717,8 @@ function startFlowFrom(id, backward = false) {
   for (let i = 0; i < edges.length; i++) {
     const e = edges[i];
     let targetId = null;
-    if (e.from === id && nodeSprites.has(e.to)) targetId = e.to;
-    else if (e.to === id && nodeSprites.has(e.from)) targetId = e.from;
+    if (e.from === id && nodeIx.has(e.to)) targetId = e.to;
+    else if (e.to === id && nodeIx.has(e.from)) targetId = e.from;
     if (!targetId || targetId === id) continue;
     // 只有到达端点是「选中/高亮/组选」才继续级联；否则仅让这条边亮一次
     const cascade = selectedIds.has(targetId) || highlightIds.has(targetId);
@@ -772,16 +806,16 @@ function animate(now) {
   }
   // [DBG] 心跳：每秒打一次，确认渲染循环活着
   if (__frame % 60 === 0) {
-    console.log(`[DBG] tick frame=${__frame} sprites=${nodeSprites.size} edges=${edgeData.length} selected=${selectedIds.size}`);
+    console.log(`[DBG] tick frame=${__frame} nodes=${instNode.length} edges=${edgeData.length} selected=${selectedIds.size}`);
     // [DBG] 读屏幕画布像素：同时取「选中」和「未选中」各一个节点做对比
     const __aid = activeId ?? selectedIds.values().next().value ?? (state.nodes[0] && state.nodes[0].id);
-    if (__aid && nodeSprites.has(__aid)) {
+    if (__aid && nodeIx.has(__aid)) {
       const ss = readScreenPixel(__aid);
       if (ss) console.log(`[DBG] screenPixel(选中 ${__aid}) = [${ss.join(",")}]`);
     }
     let __un = null;
     for (const n of state.nodes) if (!selectedIds.has(n.id)) { __un = n.id; break; }
-    if (__un && nodeSprites.has(__un)) {
+    if (__un && nodeIx.has(__un)) {
       const ss = readScreenPixel(__un);
       if (ss) console.log(`[DBG] screenPixel(未选中 ${__un}) = [${ss.join(",")}]`);
     }
@@ -791,7 +825,11 @@ function animate(now) {
 // ---------- 数据接入（保留原接口） ----------
 function clearGraph() {
   while (graphGroup.children.length) graphGroup.remove(graphGroup.children[0]);
-  nodeSprites.clear();
+  nodeMesh = null;
+  instNode = [];
+  nodeIx.clear();
+  nodeScale.clear();
+  nodeLabels.clear();
   nodesById.clear();
   nodePos.clear();
   edgeMesh = null;
@@ -813,7 +851,7 @@ function renderGraph(data, seedId) {
 
   const seedPos = seedId ? nodePos.get(seedId) : null;
   for (const n of state.nodes) {
-    if (nodeSprites.has(n.id)) continue;
+    if (nodePos.has(n.id)) continue;
     const p = new THREE.Vector3();
     if (seedPos) {
       p.copy(seedPos).add(new THREE.Vector3((Math.random() - 0.5) * 10, (Math.random() - 0.5) * 10, 0));
@@ -821,14 +859,9 @@ function renderGraph(data, seedId) {
       p.set((Math.random() - 0.5) * 30, (Math.random() - 0.5) * 30, layoutMode === "2d" ? 0 : (Math.random() - 0.5) * 10);
     }
     nodePos.set(n.id, p);
-    const sprite = makeNodeSprite(n.id);
-    sprite.position.copy(p);
-    const label = makeLabel(n.label);
-    label.visible = false;
-    graphGroup.add(sprite);
-    graphGroup.add(label);
-    nodeSprites.set(n.id, { sprite, label });
+    nodeScale.set(n.id, 1);
   }
+  rebuildNodes(); // 重建 InstancedMesh（节点数变化时）
 
   rebuildEdges();
   if (isFresh) centerView(); // 仅在全新加载时居中；增量并入（探索/定位）不跳相机
@@ -877,27 +910,14 @@ function syncSelectionUI() {
   dbgSelection("sync");
 }
 
-/* [DBG] 选中后打印每个选中节点的最终材质/透明度，便于排查选中无视觉变化 */
+/* [DBG] 选中后读选中/未选中节点的实际渲染像素（亮暗对比） */
 function dbgSelection(tag) {
-  const lines = [];
-  for (const id of selectedIds) {
-    const ent = nodeSprites.get(id);
-    if (!ent) { lines.push(`  sel=${id} 不在nodeSprites!`); continue; }
-    const m = ent.sprite.material;
-    lines.push(
-      `  sel=${id} kind=${(nodesById.get(id) || {}).kind} ` +
-      `color=(${m.color.r.toFixed(2)},${m.color.g.toFixed(2)},${m.color.b.toFixed(2)}) ` +
-      `opacity=${m.opacity.toFixed(2)} label.visible=${ent.label.visible}`,
-    );
-  }
-  console.log(`[DBG] ${tag} selectedIds.size=${selectedIds.size}\n` + lines.join("\n"));
-  // [DBG] 同时读「一个选中」和「一个未选中」节点的实际渲染像素，看亮暗对比
+  console.log(`[DBG] ${tag} selectedIds.size=${selectedIds.size} nodes=${instNode.length}`);
   if (state.nodes.length > 0) {
     const selId = activeId ?? selectedIds.values().next().value;
-    const selNode = selId && nodeSprites.has(selId) ? selId : null;
-    // 取一个未选中节点
+    const selNode = selId && nodePos.has(selId) ? selId : null;
     let unselId = null;
-    for (const n of state.nodes) if (!selectedIds.has(n.id) && nodeSprites.has(n.id)) { unselId = n.id; break; }
+    for (const n of state.nodes) if (!selectedIds.has(n.id) && nodePos.has(n.id)) { unselId = n.id; break; }
     if (selNode) {
       const px = readNodePixel(selNode);
       if (px) console.log(`[DBG] renderedPixel(选中 ${selNode}) = [${px.join(",")}]`);
@@ -911,11 +931,11 @@ function dbgSelection(tag) {
 
 /** [DBG] 直接读「屏幕画布」默认帧缓冲上某节点的实际像素（preserveDrawingBuffer） */
 function readScreenPixel(id) {
-  const sp = nodeSprites.get(id);
-  if (!sp) return null;
+  const p0 = nodePos.get(id);
+  if (!nodePos.has(id)) return null;
   const W = renderer.domElement.width;
   const H = renderer.domElement.height;
-  const p = sp.sprite.getWorldPosition(new THREE.Vector3()).project(camera);
+  const p = p0.clone().project(camera);
   const sx0 = Math.floor((p.x * 0.5 + 0.5) * W);
   const sy0 = Math.floor((-p.y * 0.5 + 0.5) * H);
   const bx = Math.max(0, Math.min(W - 3, sx0 - 1));
@@ -933,14 +953,14 @@ function readScreenPixel(id) {
 
 /** [DBG] 把场景渲到离屏纹理，在节点屏幕位置采 3x3 取最亮 RGBA（抗布局漂移误采） */
 function readNodePixel(id) {
-  const sp = nodeSprites.get(id);
-  if (!sp) return null;
+  const p0 = nodePos.get(id);
+  if (!p0) return null;
   const W = renderer.domElement.width;
   const H = renderer.domElement.height;
   const rt = new THREE.WebGLRenderTarget(W, H);
   renderer.setRenderTarget(rt);
   renderer.render(scene, camera);
-  const p = sp.sprite.getWorldPosition(new THREE.Vector3()).project(camera);
+  const p = p0.clone().project(camera);
   let sx0 = Math.floor((p.x * 0.5 + 0.5) * W);
   let sy0 = Math.floor((-p.y * 0.5 + 0.5) * H);
   const buf = new Uint8Array(4 * 9);
@@ -1095,12 +1115,12 @@ document.getElementById("build").textContent = `build ${BUILD}`;
 const __autopick = new URLSearchParams(location.search).has("autopick");
 if (__autopick) {
   setTimeout(() => {
-    if (nodeSprites.size > 0) {
+    if (instNode.length > 0) {
       layoutRunning = false;
       const first = state.nodes[0].id;
       selectOnly(first);
       setTimeout(() => {
-        console.log(`[DBG] AUTOPICK done first=${first} sprites=${nodeSprites.size} total=${state.nodes.length}`);
+        console.log(`[DBG] AUTOPICK done first=${first} nodes=${instNode.length} total=${state.nodes.length}`);
       }, 300);
     } else {
       setTimeout(() => console.log("[DBG] AUTOPICK no nodes yet"), 2000);
