@@ -61,6 +61,14 @@ export interface QueryResult {
   edges: number;
   view: GraphView;
   cypher: string;
+  /** 增量并入后当前工作图（__current__）的累积状态。 */
+  current?: {
+    nodes: number;
+    edges: number;
+    addedNodes: number;
+    addedEdges: number;
+    revision: number;
+  };
 }
 
 /**
@@ -122,6 +130,8 @@ export class GraphService {
     this.assertProject(project);
     const records = await this.neo4j.run(cypher, params, "read");
     const view = extractGraphView(cypher, records);
+    // 增量并入当前工作图：本次结果按节点 id / 边 key 去重累加（固定页实时跟随、new_graph 命名保存都基于它）。
+    const { merged, addedNodes, addedEdges, revision } = this.mergeCurrent(project, view, cypher);
     const viewId = this.saveView(project, view, cypher);
     return {
       project,
@@ -131,7 +141,161 @@ export class GraphService {
       edges: view.edges.length,
       view,
       cypher,
+      current: {
+        nodes: merged.nodes.length,
+        edges: merged.edges.length,
+        addedNodes,
+        addedEdges,
+        revision,
+      },
     };
+  }
+
+  // ---------- 当前工作图（增量并入 + 命名保存 / 开新图） ----------
+
+  /** 项目当前累积工作图（供固定 3D 页实时轮询跟随）。 */
+  getCurrent(project: string) {
+    return this.readCurrent(project);
+  }
+
+  /** 把一次查询的结果并入当前工作图（按 id/边键去重），返回合并后的图与增量统计。 */
+  private mergeCurrent(
+    project: string,
+    view: GraphView,
+    cypher: string,
+  ): { merged: GraphView; addedNodes: number; addedEdges: number; revision: number } {
+    const cur = this.readCurrent(project);
+    const merged = mergeGraphs(cur, view);
+    const addedNodes = merged.nodes.length - cur.nodes.length;
+    const addedEdges = merged.edges.length - cur.edges.length;
+    const revision = cur.revision + 1;
+    this.writeCurrent(project, { ...merged, cypher }, revision);
+    return { merged, addedNodes, addedEdges, revision };
+  }
+
+  /**
+   * 命名保存当前工作图并开新图：把累积的旧图以 name 保存为一份历史快照（有意义的名字便于回看），
+   * 然后清空工作图、开启一张新图。与 query_graph 的增量并入配合，agent 换分析主题时调用。
+   */
+  newGraph(project: string, name: string) {
+    this.assertProject(project);
+    const cur = this.readCurrent(project);
+    const oldNodes = cur.nodes.length;
+    const oldEdges = cur.edges.length;
+    // 无内容可保存：幂等清空，返回 nothingToSave。
+    if (oldNodes === 0 && oldEdges === 0 && (!cur.rows || cur.rows.length === 0)) {
+      this.writeCurrent(project, { nodes: [], edges: [] }, cur.revision + 1);
+      return { project, saved: null, cleared: true, clearedNodes: 0 };
+    }
+    const id = this.saveNamedView(project, cur, name.trim());
+    this.writeCurrent(project, { nodes: [], edges: [] }, cur.revision + 1);
+    return {
+      project,
+      saved: {
+        id,
+        name: name.trim() || id,
+        nodes: oldNodes,
+        edges: oldEdges,
+        url: `${this.config.viewBaseUrl}/#/view/${project}/${id}`,
+      },
+      cleared: true,
+      clearedNodes: oldNodes,
+    };
+  }
+
+  /** 读当前工作图（__current__.json），不存在时返回空工作图。 */
+  private readCurrent(project: string) {
+    try {
+      const raw = JSON.parse(fs.readFileSync(this.currentPath(project), "utf8"));
+      const nodes = Array.isArray(raw.nodes) ? (raw.nodes as GraphNode[]) : [];
+      const edges = Array.isArray(raw.edges) ? (raw.edges as GraphEdge[]) : [];
+      return {
+        id: "__current__",
+        project,
+        name: "当前工作图（实时）",
+        kind: "current",
+        nodes,
+        edges,
+        rows: raw.rows,
+        cypher: raw.cypher || "",
+        revision: Number(raw.revision) || 0,
+        updatedAt: raw.updatedAt || "",
+        empty: nodes.length === 0 && edges.length === 0 && !(Array.isArray(raw.rows) && raw.rows.length > 0),
+      };
+    } catch {
+      return {
+        id: "__current__",
+        project,
+        name: "当前工作图（实时）",
+        kind: "current",
+        nodes: [],
+        edges: [],
+        revision: 0,
+        updatedAt: "",
+        empty: true,
+      };
+    }
+  }
+
+  /** 写当前工作图（__current__.json）。 */
+  private writeCurrent(project: string, view: GraphView & { cypher?: string }, revision: number): void {
+    const dir = path.join(this.data.getRoot(), "projects", project);
+    fs.mkdirSync(dir, { recursive: true });
+    const prev = this.readCurrent(project);
+    fs.writeFileSync(
+      this.currentPath(project),
+      JSON.stringify(
+        {
+          id: "__current__",
+          project,
+          name: "当前工作图（实时）",
+          kind: "current",
+          cypher: view.cypher || prev.cypher || "",
+          createdAt: prev.updatedAt || new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+          revision,
+          nodes: view.nodes || [],
+          edges: view.edges || [],
+          rows: view.rows,
+        },
+        null,
+        2,
+      ),
+    );
+  }
+
+  /** 命名保存一份历史快照：id 由名字 slug + 短时间戳构成，快照内带可读 name。 */
+  private saveNamedView(
+    project: string,
+    src: { nodes: GraphNode[]; edges: GraphEdge[]; rows?: string[]; cypher?: string },
+    name: string,
+  ): string {
+    const id = `${toSlug(name) || "graph"}-${Date.now().toString(36)}`;
+    const dir = path.join(this.data.getRoot(), "projects", project);
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(
+      viewPath(this.data.getRoot(), project, id),
+      JSON.stringify(
+        {
+          id,
+          project,
+          name: name || id,
+          kind: "saved",
+          cypher: src.cypher || "",
+          createdAt: new Date().toISOString(),
+          nodes: src.nodes,
+          edges: src.edges,
+          rows: src.rows,
+        },
+        null,
+        2,
+      ),
+    );
+    return id;
+  }
+
+  private currentPath(project: string): string {
+    return path.join(this.data.getRoot(), "projects", project, "__current__.json");
   }
 
   /**
@@ -189,21 +353,40 @@ export class GraphService {
     }
   }
 
-  listViews(project: string): Array<{ id: string; createdAt: string }> {
+  listViews(project: string): Array<{
+    id: string;
+    name?: string;
+    kind?: string;
+    createdAt: string;
+    nodes?: number;
+    edges?: number;
+  }> {
     const dir = path.join(this.data.getRoot(), "projects", project);
     try {
       return fs
         .readdirSync(dir)
-        .filter((f) => f.endsWith(".json"))
+        .filter((f) => f.endsWith(".json") && f !== "__current__.json")
         .map((f) => {
           try {
             const raw = JSON.parse(fs.readFileSync(path.join(dir, f), "utf8")) as {
               id: string;
+              name?: string;
+              kind?: string;
               createdAt: string;
+              nodes?: unknown;
+              edges?: unknown;
             };
-            return raw;
+            return {
+              id: raw.id || f.replace(/\.json$/, ""),
+              name: typeof raw.name === "string" && raw.name ? raw.name : undefined,
+              kind: raw.kind,
+              createdAt: raw.createdAt || "",
+              nodes: Array.isArray(raw.nodes) ? raw.nodes.length : undefined,
+              edges: Array.isArray(raw.edges) ? raw.edges.length : undefined,
+            };
           } catch {
-            return { id: f.replace(/\.json$/, ""), createdAt: "" };
+            const id = f.replace(/\.json$/, "");
+            return { id, name: undefined, kind: undefined, createdAt: "", nodes: undefined, edges: undefined };
           }
         })
         .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
@@ -242,6 +425,38 @@ export class GraphService {
 
 function viewPath(dataRoot: string, project: string, viewId: string): string {
   return path.join(dataRoot, "projects", project, `${viewId}.json`);
+}
+
+/** 合并两幅图：按节点 id、边 key（from->to->label）去重求并集，rows 取最新的。 */
+function mergeGraphs(a: { nodes: GraphNode[]; edges: GraphEdge[]; rows?: string[] }, b: { nodes: GraphNode[]; edges: GraphEdge[]; rows?: string[] }): GraphView {
+  const nodes = [...(a.nodes || [])];
+  const edges = [...(a.edges || [])];
+  const nodeSeen = new Set(nodes.map((n) => n.id));
+  const edgeSeen = new Set(edges.map((e) => `${e.from}->${e.to}->${e.label}`));
+  for (const n of b.nodes || []) {
+    if (!nodeSeen.has(n.id)) {
+      nodeSeen.add(n.id);
+      nodes.push(n);
+    }
+  }
+  for (const e of b.edges || []) {
+    const key = `${e.from}->${e.to}->${e.label}`;
+    if (!edgeSeen.has(key)) {
+      edgeSeen.add(key);
+      edges.push(e);
+    }
+  }
+  return { nodes, edges, rows: (b.rows?.length ? b.rows : a.rows) };
+}
+
+/** 把名字转成 URL/文件名安全的 ASCII slug（非字母数字段折叠成 -，纯中文归为 ""）。 */
+function toSlug(s: string): string {
+  return (s || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 48);
 }
 
 function formatCounts(graph: Record<string, number>): string {

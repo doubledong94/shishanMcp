@@ -163,6 +163,15 @@ export class ApiController {
     return { project, views: this.graph.listViews(project) };
   }
 
+  /** 某项目当前的「累积工作图」：query_graph 增量并入，new_graph 命名保存后清空（固定页实时跟随）。 */
+  @Get("graph/current")
+  getCurrentGraph(@Query("project") project?: string) {
+    if (!project) {
+      throw new BadRequestException("需要 project 参数");
+    }
+    return this.graph.getCurrent(project);
+  }
+
   /** SCIP 索引概览（元信息 + 文档列表统计，供调试页查看器）。 */
   @Get("scip-index/:project/summary")
   async getScipSummary(@Param("project") project: string) {

@@ -1070,14 +1070,45 @@ async function loadViews() {
   if (!project) return;
   const res = await fetch(`/api/graph/views?project=${encodeURIComponent(project)}`);
   const data = await res.json();
-  viewSel.innerHTML = '<option value="">— 读取 query_graph 的 latest 快照 —</option>';
+  viewSel.innerHTML = '<option value="">— 实时跟随当前工作图 —</option>';
   for (const v of data.views || []) {
     const opt = document.createElement("option");
     opt.value = v.id;
-    opt.textContent = `${v.id} · ${v.createdAt || ""}`;
+    // 有意义的名字优先（new_graph 命名的保存），否则退回 id；带节点数便于辨认
+    const label = v.name && v.name !== v.id ? v.name : v.id;
+    const size = typeof v.nodes === "number" ? ` · ${v.nodes}节点` : "";
+    opt.textContent = `${label}${size}`;
     viewSel.appendChild(opt);
   }
 }
+
+/** [live] 固定页实时跟随当前工作图：agent 调 query_graph → 增量并入；new_graph → 保存并清空。
+ * 仅当下拉框为空（实时跟随）时跟随；选中某个已保存视图（pin）时暂停，避免被拽走。 */
+let lastGraphSig = "";
+async function pollCurrent() {
+  const project = projectSel.value;
+  if (!project) return;
+  if (viewSel.value !== "") return; // 用户 pinned 了某个历史视图，不跟随
+  try {
+    const res = await fetch(`/api/graph/current?project=${encodeURIComponent(project)}`);
+    if (!res.ok) return;
+    const cur = await res.json();
+    const nodes = (cur.nodes || []).length;
+    const edges = (cur.edges || []).length;
+    const sig = `${cur.revision || 0}:${nodes}:${edges}`;
+    if (sig === lastGraphSig) return; // 无变化，跳过
+    lastGraphSig = sig;
+    if (cur.empty || nodes === 0) {
+      if (state.nodes.length > 0) {
+        clearGraph();
+        statsEl.textContent = "0 节点 · 0 边（工作图已清空，等待新的 query_graph）";
+      }
+      return;
+    }
+    renderGraph(cur); // 增量并入：按 id 去重、保留已有节点位置（沉降动画）
+  } catch { /* 瞬时错误跳过，下次轮询再试 */ }
+}
+setInterval(pollCurrent, 2000);
 
 async function load() {
   errorEl.textContent = "";
@@ -1087,17 +1118,25 @@ async function load() {
     return;
   }
   let viewId = viewSel.value;
+  if (viewId === "__current__") viewId = ""; // 兼容直达当前工作图的 URL
   if (!viewId) {
-    // 读最近一个快照（query_graph 每次调用都会存）
-    const res = await fetch(`/api/graph/views?project=${encodeURIComponent(project)}`);
-    const data = await res.json();
-    viewId = data.views?.[0]?.id;
-    if (!viewId) {
-      errorEl.textContent = "该项目还没有图快照。先让 AI 调用 query_graph，或手动 POST /api/run/query_graph";
+    // 实时跟随：直接读当前累积工作图（query_graph 增量并入的）
+    const res = await fetch(`/api/graph/current?project=${encodeURIComponent(project)}`);
+    if (!res.ok) {
+      errorEl.textContent = `读取当前工作图失败: ${res.status}`;
       return;
     }
+    const cur = await res.json();
+    // 加载新内容 → 重置当前图
+    clearGraph();
+    if (cur.empty || !cur.nodes?.length) {
+      statsEl.textContent = "0 节点 · 0 边（工作图为空，先让 AI 调用 query_graph，或手动 POST /api/run/query_graph）";
+      return;
+    }
+    renderGraph(cur);
+    return;
   }
-  // 加载新视图 → 重置当前图
+  // 加载已保存视图 → 重置当前图
   clearGraph();
   const viewRes = await fetch(`/api/graph/views/${encodeURIComponent(project)}/${encodeURIComponent(viewId)}`);
   if (!viewRes.ok) {
@@ -1664,12 +1703,14 @@ loadProjects().then(() => {
   }
 });
 projectSel.addEventListener("change", () => {
+  lastGraphSig = ""; // 换项目后重新跟随新项目的当前工作图
   syncScipSelector(projectSel.value);
   loadViews();
   resetCodeTree();
 });
 codeProjectSel.addEventListener("change", () => {
   projectSel.value = codeProjectSel.value;
+  lastGraphSig = "";
   loadViews();
   resetCodeTree();
 });
