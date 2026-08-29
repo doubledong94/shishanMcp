@@ -191,7 +191,25 @@ RETURN p LIMIT 20
 
 **循环的 may 语义**：顺序→数据在实现上是独立推导（FLOWS 来自数据流分析，非 NEXT 链计算），两者一致但不互斥——`order_true/false`（指定表达式真值）与对应分支的数据流天然对得上。
 
-### 11.1 五维两两相交（交点位置决定单/双 MATCH）
+### 11.1 五维度 ↔ 边 汇总
+
+**五个维度 = 五组关系类型（边），不是节点。** 节点（`Value`/`Condition`/`CalledMethod`/`Method`/`Class`）是通用端点、本身不携带维度；**同一节点类型可同时参与多个维度**——这正是「相交搜索」能在节点上汇聚的根因。旧项目曾把维度物化成中间节点（`DataStep`/`TimingStep`），新图把这些删掉，把维度迁移到**边的类型 + 方向**上承载（正反方向用 cypher 关系方向表达）。
+
+| 维度 | 核心/骨架边 | 入口边 | 出口边 | preset |
+| --- | --- | --- | --- | --- |
+| **1 时机** calls | `(:CalledMethod)-[:CALLS]->(:Method)` | `(:Condition)-[:LEADS_TO]->(:CalledMethod)`、`(:Value)-[:ARG_OF/RET_OF]->(:CalledMethod)` | — | `calls`/`callers` |
+| **2 数据** dataflow | `(:Value)-[:FLOWS]->(:Value)` | — | 进出调用：`(:Value)-[:ARG_OF]->(:CalledMethod)`、`(:Value)-[:RET_OF]->(:CalledMethod)` | `dataflow` |
+| **3 逻辑** logic | 条件树：`(:Method)-[:ROOT]->(:Condition)`、`(:Condition)-[:SUB]->(:Condition)`、`(:Condition)-[:ELSE]->(:Condition)` | `(:Value)-[:CONTROLS]->(:Condition)` | `(:Condition)-[:LEADS_TO]->(:CalledMethod)` | `controls` |
+| **4 嵌套** nesting | `(:Value)-[:REF]->(:CalledMethod\|:Value)`、`(:Value)-[:INDEX]->(:Value{kind:'INDEX'})` | — | — | `nesting` |
+| **5 顺序** order | 事件链 `(X)-[:NEXT]->(Y)` | `(:Condition)-[:NEXT]->(then首事件)` | 函数尾 `NEXT` 跳回调用者：`(:CalledMethod)-[:NEXT]->被调首事件…-[:NEXT]->(:CalledReturn)-[:NEXT]->调用者后续` | `codeorder` |
+
+- **时机**：核心 `CALLS`（CalledMethod→Method）。与逻辑/数据/嵌套的接缝都在调用点——`LEADS_TO` 从条件进来，实参 `ARG_OF` / 返回 `RET_OF` 让数据进出调用，`REF` 也能引到它。是循环里被多维度汇聚的枢纽。
+- **数据**：核心 `FLOWS`（Value→Value）；进出调用靠实参/返回槽。
+- **逻辑**：内部骨架是**条件树**（`ROOT` 根分支、`SUB` 分支嵌套、`ELSE` else 链）。入口 `CONTROLS`（守卫值→分支），出口 `LEADS_TO`（分支→触发调用点），据此交接到时机维度的 `CALLS`。`Condition↔Condition` 走 `SUB`/`ELSE`，不是 `CALLS`/`LEADS_TO`/`CONTROLS`/`FLOWS`。
+- **嵌套**：核心 `REF`（实例→成员/调用）+ `INDEX`（数组访问）。正交维度，不参与循环，但可在循环任意节点上相交。
+- **顺序**：核心 `NEXT` 事件链；分支入口 `Condition-[:NEXT]->(then首事件)`；跨函数时被调方法经 `CALLED_RETURN` 把顺序接回调用者后续。
+
+### 11.2 五维两两相交（交点位置决定单/双 MATCH）
 
 每条维度是一条**有向线**（起点→终点）：数据 D=`FLOWS`（写→读）、逻辑 L=`CONTROLS→LEADS_TO`（守卫值→调用点）、时机 T=`CALLS`（调用点→被调方法）、顺序 O=`NEXT*`（最早→最晚）、嵌套 N=`REF`（实例→成员）。
 
