@@ -423,15 +423,18 @@ attribute vec3 edgeDir;
 attribute vec3 edgeColor;
 attribute vec2 edgeUv;
 attribute float edgeFlow;
+attribute float edgeAlpha;
 uniform float lineHalfWidth;
 uniform vec3 camDir;
 varying vec2 vUv;
 varying vec3 vColor;
 varying float vFlow;
+varying float vAlpha;
 void main() {
   vUv = edgeUv;
   vColor = edgeColor;
   vFlow = edgeFlow;
+  vAlpha = edgeAlpha;
   vec3 nd = normalize(cross(edgeDir, camDir) + vec3(1e-5));
   gl_Position = projectionMatrix * modelViewMatrix * vec4(edgePos + nd * lineHalfWidth, 1.0);
 }`;
@@ -439,7 +442,7 @@ const EDGE_FRAG = `
 varying vec2 vUv;
 varying vec3 vColor;
 varying float vFlow;
-uniform float alphaEdge;
+varying float vAlpha;
 void main() {
   vec3 color = vColor;
   // 流光：vFlow > -1.5 时画一段移动暗带（对齐旧 FlowLine）
@@ -447,11 +450,12 @@ void main() {
     float f = 0.8 * smoothstep(0.2, 0.0, abs(vFlow));
     color -= vec3(f);
   }
-  gl_FragColor = vec4(color, alphaEdge);
+  // 边 alpha 随端点选中/悬停（顶点0,3=起点 alpha，1,2=终点 alpha），对齐旧 FlowLine
+  gl_FragColor = vec4(color, vAlpha);
 }`;
 
 let edgeGeo = null; // 动态 BufferGeometry（容量预分配，写入活跃边的 4 顶点）
-let ePosArr = null, eDirArr = null, eColArr = null, eUvArr = null, eFlowArr = null;
+let ePosArr = null, eDirArr = null, eColArr = null, eUvArr = null, eFlowArr = null, eAlphaArr = null;
 
 function rebuildEdges() {
   const edges = state.edges.filter((e) => nodePos.has(e.from) && nodePos.has(e.to));
@@ -472,6 +476,7 @@ function rebuildEdges() {
   eColArr = new Float32Array(V * 3);
   eUvArr = new Float32Array(V * 2);
   eFlowArr = new Float32Array(V).fill(-2); // -2 = 无流光
+  eAlphaArr = new Float32Array(V).fill(0.3); // 边 alpha：默认未选中 0.3，随端点选中更新
   // uv：每边 (-1,-1),(-1,1),(1,1),(1,-1)
   for (let i = 0; i < cap; i++) {
     const b = i * 4;
@@ -485,6 +490,7 @@ function rebuildEdges() {
   edgeGeo.setAttribute("edgeColor", new THREE.BufferAttribute(eColArr, 3));
   edgeGeo.setAttribute("edgeUv", new THREE.BufferAttribute(eUvArr, 2));
   edgeGeo.setAttribute("edgeFlow", new THREE.BufferAttribute(eFlowArr, 1));
+  edgeGeo.setAttribute("edgeAlpha", new THREE.BufferAttribute(eAlphaArr, 1));
   const idx = new Uint32Array(cap * 6);
   for (let i = 0; i < cap; i++) {
     const b = i * 4, o = i * 6;
@@ -502,7 +508,6 @@ function rebuildEdges() {
     uniforms: {
       lineHalfWidth: { value: EDGE_HALF_WIDTH },
       camDir: { value: new THREE.Vector3(0, 0, -1) },
-      alphaEdge: { value: 0.95 },
     },
   });
   edgeMesh = new THREE.Mesh(edgeGeo, mat);
@@ -537,16 +542,28 @@ function updateEdgeBuffers() {
     eColArr[(o + 3) * 3] = _EDGE_C0.r; eColArr[(o + 3) * 3 + 1] = _EDGE_C0.g; eColArr[(o + 3) * 3 + 2] = _EDGE_C0.b;
     eColArr[(o + 1) * 3] = _EDGE_C1.r; eColArr[(o + 1) * 3 + 1] = _EDGE_C1.g; eColArr[(o + 1) * 3 + 2] = _EDGE_C1.b;
     eColArr[(o + 2) * 3] = _EDGE_C1.r; eColArr[(o + 2) * 3 + 1] = _EDGE_C1.g; eColArr[(o + 2) * 3 + 2] = _EDGE_C1.b;
+    // alpha：顶点0,3=起点 alpha，1,2=终点 alpha（对齐旧 FlowLine，端点选中则不透明、未选中半透明）
+    const aFrom = nodeAlphaFor(e.from);
+    const aTo = nodeAlphaFor(e.to);
+    eAlphaArr[o + 0] = aFrom; eAlphaArr[o + 3] = aFrom;
+    eAlphaArr[o + 1] = aTo;   eAlphaArr[o + 2] = aTo;
   }
   edgeGeo.setDrawRange(0, n * 6);
   edgeGeo.attributes.edgePos.needsUpdate = true;
   edgeGeo.attributes.edgeDir.needsUpdate = true;
   edgeGeo.attributes.edgeColor.needsUpdate = true;
+  edgeGeo.attributes.edgeAlpha.needsUpdate = true;
 }
 
 const _EDGE_C0 = new THREE.Color();
 const _EDGE_C1 = new THREE.Color();
 const _EDGE_CAMDIR = new THREE.Vector3();
+
+/** 端点 alpha（对齐旧 FlowLine：选中/高亮 1.0 不透明，未选中 0.3 半透明，悬停 +0.2）。 */
+function nodeAlphaFor(id) {
+  const base = selectedIds.has(id) || highlightIds.has(id) ? 1.0 : 0.3;
+  return Math.min(base + (hoverId === id ? 0.2 : 0), 1.0);
+}
 
 /** 节点当前视觉色（正常模式灰度 / 流上色模式渐变，选中/悬停提亮）。节点与边共用，保证边色随节点色。 */
 const _NODE_WHITE = new THREE.Color(1, 1, 1);
