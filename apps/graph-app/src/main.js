@@ -899,7 +899,7 @@ function setupInteraction() {
   el.addEventListener("contextmenu", (e) => {
     e.preventDefault();
     const id = pickNode(e.clientX, e.clientY);
-    if (id) startFlowFrom(id, e.shiftKey);
+    if (id) { flowGestureEdges.clear(); startFlowFrom(id, e.shiftKey); } // 新手势：清空已流集合，本次只做一回动画
   });
 
   // 数字键 5-9（+单击 = 按跳数选邻居）；Ctrl+H 自动上色 / Ctrl+Shift+H 清除未选中节点颜色
@@ -979,7 +979,9 @@ function setEdgeFlow(idx, v) {
   edgeGeo.attributes.edgeFlow.needsUpdate = true;
 }
 
-/** 边流光脉冲：沿「该节点 → 选中邻居」的边传播，到达端点再级联（穿越选中子图）。 */
+let flowGestureEdges = new Set(); // 本次右键手势已流过的边索引：同一手势内不重播，保证一次性动画并防止选中子图有环时无限往返
+/** 边流光脉冲：沿「该节点 → 选中邻居」的边传播，到达端点再级联（穿越选中子图）。
+ *  对齐旧 FlowLine：每条边只脉冲一次(0→1)后熄灭；手势内已流过的边不再重复。 */
 function startFlowFrom(id, backward = false) {
   const edges = state.edges;
   for (let i = 0; i < edges.length; i++) {
@@ -988,6 +990,8 @@ function startFlowFrom(id, backward = false) {
     if (e.from === id && nodeIx.has(e.to)) targetId = e.to;
     else if (e.to === id && nodeIx.has(e.from)) targetId = e.from;
     if (!targetId || targetId === id) continue;
+    if (flowGestureEdges.has(i)) continue; // 本次手势已流，跳过（防环）
+    flowGestureEdges.add(i);
     // 只有到达端点是「选中/高亮/组选」才继续级联；否则仅让这条边亮一次
     const cascade = selectedIds.has(targetId) || highlightIds.has(targetId);
     animateFlowEdge(i, targetId, cascade, backward);
