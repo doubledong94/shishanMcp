@@ -2,7 +2,20 @@ import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { createTweenEngine, sineInOut } from "./anim.js";
 
-const BUILD = "2026-08-23 17:06:19"; // 构建时间（本地，精确到秒）
+// 构建时间：由 vite.config 在构建时注入，随每次构建自动更新（不再手写固定值）
+// __BUILD_TIME__ 是构建时刻的纪元毫秒（vite define 注入）；在浏览器里用本地时区格式化成人类可读时间
+const BUILD = (() => {
+  try {
+    const ms = Number(__BUILD_TIME__);
+    if (!Number.isFinite(ms)) return "dev";
+    return new Date(ms).toLocaleString("zh-CN", {
+      year: "numeric", month: "2-digit", day: "2-digit",
+      hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false,
+    });
+  } catch {
+    return "dev";
+  }
+})();
 const app = document.getElementById("app");
 const projectSel = document.getElementById("project");
 const viewSel = document.getElementById("view");
@@ -234,29 +247,33 @@ const EDGE_VERT = `
 attribute float aFlow;
 varying float vUvx;
 varying float vUvy;
+varying float vFlow;
 void main() {
   vUvx = uv.x;
   vUvy = uv.y;
+  vFlow = aFlow;
   gl_Position = projectionMatrix * modelViewMatrix * instanceMatrix * vec4(position, 1.0);
 }`;
 const EDGE_FRAG = `
-#ifdef USE_INSTANCING_COLOR
 varying float vUvx;
 varying float vUvy;
+varying float vFlow;
 void main() {
-  vec3 c = instanceColor;
+  // 统一浅蓝（0x6cb6ff）。注意：ShaderMaterial 的片段着色器里没有
+  // USE_INSTANCING_COLOR（three 只注入到顶点前缀），所以不能用 instanceColor，
+  // 直接硬编码边色，避免整个 main 被 #ifdef 预处理掉导致无片段程序。
+  vec3 c = vec3(0.42, 0.71, 1.0);
   // 方向明暗：uv.y 大于中线一侧微亮，模拟 FlatLine 的方向暗示
   float shade = (vUvy > 0.5) ? 1.16 : 0.9;
   vec3 outC = c * shade;
-  // 流光：aFlow 在 [0,1] 时画一段移动亮带
-  float flow = aFlow;
+  // 流光：vFlow 在 [0,1] 时画一段移动亮带
+  float flow = vFlow;
   if (flow >= 0.0 && flow <= 1.0) {
     float band = 0.95 * smoothstep(0.16, 0.0, abs(vUvx - flow));
     outC += band * vec3(1.0, 1.0, 0.92);
   }
-  gl_FragColor = vec4(outC, 0.55);
-}
-#endif`;
+  gl_FragColor = vec4(outC, 0.9);
+}`;
 
 function rebuildEdges() {
   const edges = state.edges.filter((e) => nodePos.has(e.from) && nodePos.has(e.to));
@@ -277,12 +294,13 @@ function rebuildEdges() {
     fragmentShader: EDGE_FRAG,
     transparent: true,
     depthWrite: false,
+    depthTest: false, // 连线永远画在最上层，避免被节点圆盘遮挡（保证密图连线可见）
   });
   edgeMesh = new THREE.InstancedMesh(geo, mat, count);
   const color = new THREE.Color();
   edgeData.forEach((e, i) => {
-    // 节点为灰盘，边取灰（对齐旧项目 FlowLine 取端点节点灰）
-    color.setHex(0x8b949e);
+    // 边用浅蓝，与灰色圆盘拉开对比，密图下连线更易辨
+    color.setHex(0x6cb6ff);
     edgeMesh.setColorAt(i, color);
   });
   graphGroup.add(edgeMesh);
@@ -318,7 +336,7 @@ function updateEdgeMatrices() {
     _v4.copy(_v3).cross(dir);
     if (_v4.lengthSq() < 1e-8) _v4.set(0, 1, 0);
     _v4.normalize();
-    const thickness = 1.1;
+    const thickness = 2.5;
     _m.makeBasis(dir.clone().multiplyScalar(len), _v4.clone().multiplyScalar(thickness), _v3.clone().cross(dir).normalize());
     _m.setPosition(_v2);
     edgeMesh.setMatrixAt(i, _m);
@@ -327,7 +345,8 @@ function updateEdgeMatrices() {
 }
 
 // ---------- 布局：连续力导向仿真（移植旧 FR，让节点涌动沉降） ----------
-const LAYOUT = { repulsion: 2.5, minDist: 1.2, refTarget: 6, target: 3, spring: 0.02, center: 0.05, temperature: 0.22 };
+// target/refTarget 是相邻节点的弹簧平衡距离；调大让节点摊开，连线在盘间隙里可见。
+const LAYOUT = { repulsion: 5, minDist: 1.4, refTarget: 11, target: 7, spring: 0.02, center: 0.05, temperature: 0.22 };
 
 function stepLayout(dt) {
   const nodes = state.nodes;
@@ -395,7 +414,7 @@ function updateScaleByDistance() {
     const dist = Math.max(Math.sqrt(best), 0.4);
     const node = nodes[i];
     const isRoot = node.kind === "Project" || node.kind === "Result";
-    const s = isRoot ? 3.6 : THREE.MathUtils.clamp(2.4 * Math.sqrt(dist * 0.6), 1.0, 3.2);
+    const s = isRoot ? 3.2 : THREE.MathUtils.clamp(1.6 * Math.sqrt(dist * 0.6), 0.9, 2.4);
     nodeScale.set(node.id, s);
   }
   updateNodePositions();
@@ -804,22 +823,6 @@ function animate(now) {
       console.log("[DBG][FRAME-ERR] " + (err && err.stack ? err.stack : err));
     }
   }
-  // [DBG] 心跳：每秒打一次，确认渲染循环活着
-  if (__frame % 60 === 0) {
-    console.log(`[DBG] tick frame=${__frame} nodes=${instNode.length} edges=${edgeData.length} selected=${selectedIds.size}`);
-    // [DBG] 读屏幕画布像素：同时取「选中」和「未选中」各一个节点做对比
-    const __aid = activeId ?? selectedIds.values().next().value ?? (state.nodes[0] && state.nodes[0].id);
-    if (__aid && nodeIx.has(__aid)) {
-      const ss = readScreenPixel(__aid);
-      if (ss) console.log(`[DBG] screenPixel(选中 ${__aid}) = [${ss.join(",")}]`);
-    }
-    let __un = null;
-    for (const n of state.nodes) if (!selectedIds.has(n.id)) { __un = n.id; break; }
-    if (__un && nodeIx.has(__un)) {
-      const ss = readScreenPixel(__un);
-      if (ss) console.log(`[DBG] screenPixel(未选中 ${__un}) = [${ss.join(",")}]`);
-    }
-  }
 }
 
 // ---------- 数据接入（保留原接口） ----------
@@ -1053,23 +1056,56 @@ function mergeView(view) {
   }
 }
 
+/** 带重试、且对非 JSON 响应（如部署空档 nginx 的 502 HTML 页）健壮的 JSON 拉取。
+ *  成功返回解析后的对象；超过重试次数才抛错，由调用方决定自愈策略。 */
+const MAX_FETCH_RETRY = 5;
+async function fetchJson(url, retries = MAX_FETCH_RETRY) {
+  let lastErr;
+  for (let i = 0; i < retries; i++) {
+    try {
+      const res = await fetch(url);
+      if (!res.ok) throw new Error(`HTTP ${res.status} for ${url}`);
+      const ct = res.headers.get("content-type") || "";
+      if (!ct.includes("application/json") && !ct.includes("text/json")) {
+        const sample = (await res.text()).slice(0, 80).replace(/\s+/g, " ");
+        throw new Error(`非 JSON 响应 (${ct || "未知类型"}): ${sample}`);
+      }
+      return await res.json();
+    } catch (err) {
+      lastErr = err;
+      // 指数退避：600ms / 1.2s / 1.8s …，趟过瞬时 502 / 后端重启空档
+      await new Promise((r) => setTimeout(r, 600 * (i + 1)));
+    }
+  }
+  throw lastErr;
+}
+
 async function loadProjects() {
-  const res = await fetch("/api/projects");
-  const data = await res.json();
-  projectSel.innerHTML = "";
-  for (const p of data.projects || []) {
-    const opt = document.createElement("option");
-    opt.value = p.name;
-    opt.textContent = p.name;
-    projectSel.appendChild(opt);
+  try {
+    const data = await fetchJson("/api/projects");
+    projectSel.innerHTML = "";
+    for (const p of data.projects || []) {
+      const opt = document.createElement("option");
+      opt.value = p.name;
+      opt.textContent = p.name;
+      projectSel.appendChild(opt);
+    }
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    errorEl.textContent = `加载项目失败（${msg}），5 秒后自动重试…`;
+    setTimeout(loadProjects, 5000); // 自愈：后端恢复后自动重新加载
   }
 }
 
 async function loadViews() {
   const project = projectSel.value;
   if (!project) return;
-  const res = await fetch(`/api/graph/views?project=${encodeURIComponent(project)}`);
-  const data = await res.json();
+  let data;
+  try {
+    data = await fetchJson(`/api/graph/views?project=${encodeURIComponent(project)}`);
+  } catch {
+    return; // 瞬时失败交给后台轮询下次再取，不必打断交互
+  }
   viewSel.innerHTML = '<option value="">— 实时跟随当前工作图 —</option>';
   for (const v of data.views || []) {
     const opt = document.createElement("option");
