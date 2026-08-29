@@ -203,6 +203,7 @@ function rebuildNodes() {
   // transparent+depthTest=false，与边同处透明 pass，靠 renderOrder（节点=1 > 边=0）后画盖住边。
   const mat = new THREE.ShaderMaterial({ vertexShader: NODE_VERT, fragmentShader: NODE_FRAG, transparent: true, depthTest: false, depthWrite: false, side: THREE.DoubleSide, uniforms: {} });
   nodeMesh = new THREE.InstancedMesh(geo, mat, ids.length);
+  nodeMesh.frustumCulled = false; // 节点实时移动，避免基于过期包围球的视锥裁剪（同边）
   const c = new THREE.Color(0.3, 0.3, 0.3);
   for (let i = 0; i < ids.length; i++) {
     nodeScale.set(ids[i], nodeScale.get(ids[i]) || 1);
@@ -220,7 +221,10 @@ function rebuildNodes() {
   updateNodePositions();
 }
 
-/** 每帧：把 nodePos + nodeScale 写进实例矩阵 */
+/** 每帧：把 nodePos + nodeScale + 朝向（billboard 正对相机）写进实例矩阵。
+ *  对齐旧 Nodes::setCameraDirAti：圆盘始终朝向相机，3D 轨道下也正对 → 拾取稳定（修复 hover/点击时灵时不灵）。 */
+const _NODE_Z = new THREE.Vector3(0, 0, 1);
+const _NODE_TO_CAM = new THREE.Vector3();
 function updateNodePositions() {
   if (!nodeMesh) return;
   const dn = new THREE.Object3D();
@@ -228,12 +232,25 @@ function updateNodePositions() {
     const p = nodePos.get(instNode[i]);
     if (!p) continue;
     const s = nodeScale.get(instNode[i]) || 1;
+    _NODE_TO_CAM.copy(camera.position).sub(p);
+    if (_NODE_TO_CAM.lengthSq() > 1e-8) {
+      _NODE_TO_CAM.normalize();
+      dn.quaternion.setFromUnitVectors(_NODE_Z, _NODE_TO_CAM); // 盘面法向(+Z)朝向相机
+    } else {
+      dn.quaternion.identity();
+    }
     dn.position.copy(p);
     dn.scale.set(s, s, 1);
     dn.updateMatrix();
     nodeMesh.setMatrixAt(i, dn.matrix);
   }
   nodeMesh.instanceMatrix.needsUpdate = true;
+  // InstancedMesh.raycast 会用 this.boundingSphere 做预排除；布局每帧移动节点，必须每帧重算，
+  // 否则漂到外围的节点（出/入度为 0 的边界点）超出过期包围球后被整批排除，导致无法 hover/选中。
+  if (nodeMesh.count > 0) {
+    nodeMesh.computeBoundingSphere();
+    nodeMesh.boundingSphere.radius += 6; // 预留圆盘半径余量，防止掠射命中被球面预排除
+  }
 }
 
 /** 选中/悬停 → 每实例颜色 + 编码两态位（对齐旧 Nodes::applyColor；alpha 由节点着色器按位解码） */
