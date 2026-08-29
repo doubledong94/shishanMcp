@@ -75,12 +75,12 @@ NEO4J_DATABASE  # 可选
 
 | 关系 | 说明 | 旧 prolog |
 | --- | --- | --- |
-| `(:Class)-[:DECLARES]->(:Method|:Field)` | 类声明成员 | `method / constructor / field / parameter / return` |
+| `(:Class)-[:DECLARES]->(:Method\|:Field)` | 类声明成员 | `method / constructor / field / parameter / return` |
 | `(:Method)-[:HAS_PARAM]->(:Value)` | 方法形参 | `parameter(M, P)` |
 | `(:Method)-[:RETURNS]->(:Value)` | 方法返回值 | `return(M, R)` |
-| `(:Class)-[:EXTENDS|IMPLEMENTS]->(:Class)` | 继承/实现 | `subType(T, S)` |
+| `(:Class)-[:EXTENDS\|IMPLEMENTS]->(:Class)` | 继承/实现 | `subType(T, S)` |
 | `(:Method)-[:OVERRIDES]->(:Method)` | 覆写 | `override(K, S)` |
-| ~~`(:Method)-[:USES]->(:Method|:Field)`~~ | ~~方法使用了谁（类范围 usedBy 搜索用）~~ | ~~`methodUseMethod / methodUseField`~~（已决定不实现） |
+| ~~`(:Method)-[:USES]->(:Method\|:Field)`~~ | ~~方法使用了谁（类范围 usedBy 搜索用）~~ | ~~`methodUseMethod / methodUseField`~~（已决定不实现） |
 | `(:Value)-[:TYPED_BY]->(:Class)` | 成员类型（可选，支撑类型遍历） | `instanceOf(K, T)` |
 
 **运行时层关系：**
@@ -99,7 +99,7 @@ NEO4J_DATABASE  # 可选
 | `(:Value)-[:FLOWS]->(:Value)` | 数据流（赋值/读写/传参/返回值） | `flow(Mk, S, D)` |
 | `(:Value)-[:CONTROLS]->(:Condition)` | 条件变量守卫哪个分支 | `toConditionValue→conditionItem` |
 | `(:Value)-[:REF]->(:CalledMethod)` | 嵌套方向：实例引用访问成员 | Reference |
-| `(:Value|:CalledMethod|:Condition)-[:NEXT]->(...)` | 执行顺序：事件级链，块尾接到块外后续、函数尾跨函数接到调用点（第 5 方向） | `codeOrder(Mk, S, D)` |
+| `(:Value\|:CalledMethod\|:Condition)-[:NEXT]->(...)` | 执行顺序：事件级链，块尾接到块外后续、函数尾跨函数接到调用点（第 5 方向） | `codeOrder(Mk, S, D)` |
 | `(:Condition)-[:NEXT]->(then首事件)` / `(:Condition)-[:ELSE]->(else首事件)` | 分支入口：then 走 NEXT（条件为 true）、else 走 ELSE（条件为 false）；守卫表达式经 `CONTROLS` 查询 | `toConditionValue→conditionItem` + 分支结构 |
 
 ### 3.3 属性
