@@ -1003,9 +1003,14 @@ function startFlowFrom(id, backward = false) {
   const edges = state.edges;
   for (let i = 0; i < edges.length; i++) {
     const e = edges[i];
+    // 对齐旧 startFlowFrom：正向只取「出边」(id→callee)，反向只取「入边」(caller→id)。
+    // 带的方向由 animateFlowEdge 决定：正向 from→to，反向 to→from（反向时 0 带从 id 走向呼叫方）。
     let targetId = null;
-    if (e.from === id && nodeIx.has(e.to)) targetId = e.to;
-    else if (e.to === id && nodeIx.has(e.from)) targetId = e.from;
+    if (backward) {
+      if (e.to === id && nodeIx.has(e.from)) targetId = e.from; // 入边 → 呼叫方(上游)
+    } else {
+      if (e.from === id && nodeIx.has(e.to)) targetId = e.to;   // 出边 → 被调用方(下游)
+    }
     if (!targetId || targetId === id) continue;
     if (flowGestureEdges.has(i)) continue; // 本次手势已流，跳过（防环）
     flowGestureEdges.add(i);
