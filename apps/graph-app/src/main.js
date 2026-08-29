@@ -361,6 +361,7 @@ function initMenubar() {
   document.addEventListener("click", (e) => { if (!bar.contains(e.target)) closeAll(); });
   document.getElementById("mi-flow-color").addEventListener("click", () => { closeAll(); enableFlowColor(); });
   document.getElementById("mi-clear-color").addEventListener("click", () => { closeAll(); clearUnselectedColor(); });
+  document.getElementById("mi-dim-edge").addEventListener("click", () => { closeAll(); toggleDimEdges(); });
   // 沿边选点（对齐旧 selectUpward/selectDownward 及 Ctrl 闭包版）
   document.getElementById("mi-sel-up").addEventListener("click", () => { closeAll(); selectAlongEdges(-1, false); });
   document.getElementById("mi-sel-down").addEventListener("click", () => { closeAll(); selectAlongEdges(1, false); });
@@ -415,7 +416,7 @@ function makeLabel(text) {
 // flow 属性 > -1.5 时画一段移动亮带（起点侧=flow，终点侧=flow-1）。
 // 对齐旧项目：边 transparent+depthTest=false，与节点同处透明 pass，节点 renderOrder=1 更后画 → 圆盘盖住边。
 const EDGE_CAP = 20000; // 预分配容量（对齐旧 FlowLine::edgeCapacity）
-const EDGE_HALF_WIDTH = 1.4; // 每侧半宽；总宽 ≈ 2*half
+const EDGE_HALF_WIDTH = 0.7; // 每侧半宽；总宽 ≈ 2*half（比原值减半）
 
 const EDGE_VERT = `
 attribute vec3 edgePos;
@@ -459,7 +460,7 @@ let ePosArr = null, eDirArr = null, eColArr = null, eUvArr = null, eFlowArr = nu
 
 function rebuildEdges() {
   const edges = state.edges.filter((e) => nodePos.has(e.from) && nodePos.has(e.to));
-  edgeData = edges.map((e) => ({ from: e.from, to: e.to }));
+  edgeData = edges.map((e) => ({ from: e.from, to: e.to, label: e.label })); // 保留 label 供按维度着色
   if (edgeMesh) {
     graphGroup.remove(edgeMesh);
     if (edgeGeo) edgeGeo.dispose();
@@ -535,13 +536,22 @@ function updateEdgeBuffers() {
     eDirArr[(o + 1) * 3] = dx; eDirArr[(o + 1) * 3 + 1] = dy; eDirArr[(o + 1) * 3 + 2] = dz;
     eDirArr[(o + 2) * 3] = -dx; eDirArr[(o + 2) * 3 + 1] = -dy; eDirArr[(o + 2) * 3 + 2] = -dz;
     eDirArr[(o + 3) * 3] = -dx; eDirArr[(o + 3) * 3 + 1] = -dy; eDirArr[(o + 3) * 3 + 2] = -dz;
-    // 颜色：端点节点色渐变（起点色在顶点0,3，终点色在1,2），对齐旧 FlowLine::setColors
-    nodeColorFor(e.from, _EDGE_C0);
-    nodeColorFor(e.to, _EDGE_C1);
-    eColArr[(o + 0) * 3] = _EDGE_C0.r; eColArr[(o + 0) * 3 + 1] = _EDGE_C0.g; eColArr[(o + 0) * 3 + 2] = _EDGE_C0.b;
-    eColArr[(o + 3) * 3] = _EDGE_C0.r; eColArr[(o + 3) * 3 + 1] = _EDGE_C0.g; eColArr[(o + 3) * 3 + 2] = _EDGE_C0.b;
-    eColArr[(o + 1) * 3] = _EDGE_C1.r; eColArr[(o + 1) * 3 + 1] = _EDGE_C1.g; eColArr[(o + 1) * 3 + 2] = _EDGE_C1.b;
-    eColArr[(o + 2) * 3] = _EDGE_C1.r; eColArr[(o + 2) * 3 + 1] = _EDGE_C1.g; eColArr[(o + 2) * 3 + 2] = _EDGE_C1.b;
+    if (dimEdgeOn) {
+      // 按维度平色覆盖（两端同色），区分五维度
+      edgeDimColorFor(e.label, _EDGE_C0);
+      eColArr[(o + 0) * 3] = _EDGE_C0.r; eColArr[(o + 0) * 3 + 1] = _EDGE_C0.g; eColArr[(o + 0) * 3 + 2] = _EDGE_C0.b;
+      eColArr[(o + 3) * 3] = _EDGE_C0.r; eColArr[(o + 3) * 3 + 1] = _EDGE_C0.g; eColArr[(o + 3) * 3 + 2] = _EDGE_C0.b;
+      eColArr[(o + 1) * 3] = _EDGE_C0.r; eColArr[(o + 1) * 3 + 1] = _EDGE_C0.g; eColArr[(o + 1) * 3 + 2] = _EDGE_C0.b;
+      eColArr[(o + 2) * 3] = _EDGE_C0.r; eColArr[(o + 2) * 3 + 1] = _EDGE_C0.g; eColArr[(o + 2) * 3 + 2] = _EDGE_C0.b;
+    } else {
+      // 颜色：端点节点色渐变（起点色在顶点0,3，终点色在1,2），对齐旧 FlowLine::setColors
+      nodeColorFor(e.from, _EDGE_C0);
+      nodeColorFor(e.to, _EDGE_C1);
+      eColArr[(o + 0) * 3] = _EDGE_C0.r; eColArr[(o + 0) * 3 + 1] = _EDGE_C0.g; eColArr[(o + 0) * 3 + 2] = _EDGE_C0.b;
+      eColArr[(o + 3) * 3] = _EDGE_C0.r; eColArr[(o + 3) * 3 + 1] = _EDGE_C0.g; eColArr[(o + 3) * 3 + 2] = _EDGE_C0.b;
+      eColArr[(o + 1) * 3] = _EDGE_C1.r; eColArr[(o + 1) * 3 + 1] = _EDGE_C1.g; eColArr[(o + 1) * 3 + 2] = _EDGE_C1.b;
+      eColArr[(o + 2) * 3] = _EDGE_C1.r; eColArr[(o + 2) * 3 + 1] = _EDGE_C1.g; eColArr[(o + 2) * 3 + 2] = _EDGE_C1.b;
+    }
     // alpha：顶点0,3=起点 alpha，1,2=终点 alpha（对齐旧 FlowLine，端点选中则不透明、未选中半透明）
     const aFrom = nodeAlphaFor(e.from);
     const aTo = nodeAlphaFor(e.to);
@@ -563,6 +573,39 @@ const _EDGE_CAMDIR = new THREE.Vector3();
 function nodeAlphaFor(id) {
   const base = selectedIds.has(id) || highlightIds.has(id) ? 1.0 : 0.3;
   return Math.min(base + (hoverId === id ? 0.2 : 0), 1.0);
+}
+
+// ---------- 按维度着色边（五维度 ↔ 边颜色） ----------
+let dimEdgeOn = false;
+const EDGE_DIM_OF = {
+  // 时机
+  CALLS: "timing",
+  // 数据
+  FLOWS: "data",
+  // 逻辑（条件树 + 进出）
+  ROOT: "logic", SUB: "logic", ELSE: "logic", CONTROLS: "logic", LEADS_TO: "logic",
+  // 嵌套
+  REF: "nesting", REFERENCES: "nesting", INDEX: "nesting",
+  // 顺序
+  NEXT: "order",
+};
+const EDGE_DIM_COLOR = {
+  timing: new THREE.Color(0xf0884e), // 橙红 时机 CALLS（执行/激活 = 暖色）
+  data: new THREE.Color(0x57d6a0),   // 薄荷绿 数据 FLOWS（数据/流动 = 生命色）
+  logic: new THREE.Color(0x6ea8fe),  // 蓝  逻辑 条件树（逻辑/理性 = 冷色）
+  nesting: new THREE.Color(0xc9a0ff),// 薰衣草紫 嵌套 REF/INDEX（结构/层次 = 纵深色）
+  order: new THREE.Color(0x56d3e0),  // 青  顺序 NEXT（时间/序列 = 流动色）
+  other: new THREE.Color(0x8b949e),  // 中性灰 未纳入五维度
+};
+/** 边 label → 维度颜色；未纳入五维度的（DECLARES/HAS_PARAM/RETURNS/ARG_OF…）归为灰。 */
+function edgeDimColorFor(label, out) {
+  const dim = EDGE_DIM_OF[label] || "other";
+  out.copy(EDGE_DIM_COLOR[dim]);
+}
+function toggleDimEdges() {
+  dimEdgeOn = !dimEdgeOn;
+  const st = document.getElementById("dim-state");
+  if (st) st.textContent = dimEdgeOn ? "维度着色：开" : "维度着色：关";
 }
 
 /** 节点当前视觉色（正常模式灰度 / 流上色模式渐变，选中/悬停提亮）。节点与边共用，保证边色随节点色。 */
@@ -930,6 +973,10 @@ function setupInteraction() {
       // Ctrl+Shift+H：清除未选中节点的颜色（对齐旧 clearSpecifiedColor；用 Shift 而非 Alt，Mac 通用）
       e.preventDefault();
       clearUnselectedColor();
+    } else if (e.ctrlKey && e.shiftKey && !e.altKey && e.key.toLowerCase() === "d") {
+      // Ctrl+Shift+D：按维度着色边 / 关闭
+      e.preventDefault();
+      toggleDimEdges();
     } else if (e.key === ",") {
       // 沿入边方向(上游)逐跳选中；Ctrl+, 走到上游全部闭包
       e.preventDefault();

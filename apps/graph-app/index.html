@@ -85,6 +85,13 @@
         padding: 0 6px; background: #0d1117; white-space: nowrap;
       }
       .menu-item:hover .kbd { color: #e6edf3; border-color: rgba(255,255,255,.5); background: #1f6feb; }
+      .dim-legend { padding: 6px 10px 4px; border-top: 1px solid #30363d; margin-top: 4px; }
+      .dim-state { color: #8b949e; font-size: 11px; margin-bottom: 4px; }
+      .dim-swatch {
+        display: inline-block; margin: 0 10px 4px 0; color: #c9d1d9;
+        font-size: 11px; white-space: nowrap;
+      }
+      .dim-swatch i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 4px; vertical-align: -2px; }
 
       /* ---------- 节点右键浮动菜单 ---------- */
       .context-menu {
@@ -230,6 +237,16 @@
         <div class="menu-dropdown">
           <button class="menu-item" id="mi-flow-color">按流自动上色<span class="kbd">Ctrl+H</span></button>
           <button class="menu-item" id="mi-clear-color">清除未选中节点上色<span class="kbd">Ctrl+Shift+H</span></button>
+          <button class="menu-item" id="mi-dim-edge">按维度着色边<span class="kbd">Ctrl+Shift+D</span></button>
+          <div class="dim-legend">
+            <div class="dim-state" id="dim-state">维度着色：关</div>
+            <span class="dim-swatch"><i style="background:#f0884e"></i>时机</span>
+            <span class="dim-swatch"><i style="background:#57d6a0"></i>数据</span>
+            <span class="dim-swatch"><i style="background:#6ea8fe"></i>逻辑</span>
+            <span class="dim-swatch"><i style="background:#c9a0ff"></i>嵌套</span>
+            <span class="dim-swatch"><i style="background:#56d3e0"></i>顺序</span>
+            <span class="dim-swatch"><i style="background:#8b949e"></i>其他</span>
+          </div>
         </div>
       </div>
       <div class="menu" id="menu-select">
