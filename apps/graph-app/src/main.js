@@ -357,6 +357,11 @@ function initMenubar() {
   document.addEventListener("click", (e) => { if (!bar.contains(e.target)) closeAll(); });
   document.getElementById("mi-flow-color").addEventListener("click", () => { closeAll(); enableFlowColor(); });
   document.getElementById("mi-clear-color").addEventListener("click", () => { closeAll(); clearAllColor(); });
+  // 沿边选点（对齐旧 selectUpward/selectDownward 及 Ctrl 闭包版）
+  document.getElementById("mi-sel-up").addEventListener("click", () => { closeAll(); selectAlongEdges(-1, false); });
+  document.getElementById("mi-sel-down").addEventListener("click", () => { closeAll(); selectAlongEdges(1, false); });
+  document.getElementById("mi-sel-up-all").addEventListener("click", () => { closeAll(); selectAlongEdges(-1, true); });
+  document.getElementById("mi-sel-down-all").addEventListener("click", () => { closeAll(); selectAlongEdges(1, true); });
 }
 
 /** 标签只显示在选中/悬停节点上 */
@@ -884,6 +889,14 @@ function setupInteraction() {
     } else if (e.ctrlKey && e.altKey && e.key === "8") {
       e.preventDefault();
       clearAllColor();
+    } else if (e.key === ",") {
+      // 沿入边方向(上游)逐跳选中；Ctrl+, 走到上游全部闭包
+      e.preventDefault();
+      selectAlongEdges(-1, e.ctrlKey);
+    } else if (e.key === ".") {
+      // 沿出边方向(下游)逐跳选中；Ctrl+. 走到下游全部闭包
+      e.preventDefault();
+      selectAlongEdges(1, e.ctrlKey);
     }
   });
   window.addEventListener("keyup", (e) => keysHeld.delete(e.key));
@@ -1210,6 +1223,32 @@ function addSelect(id) {
   selectedIds.add(id);
   activeId = id;
   syncSelectionUI();
+}
+/**
+ * 沿有向边方向逐跳扩展选中（对齐旧 BoundedIncrementalGraph::selectUpward/selectDownward）：
+ *  dir<0（逗号 ,）：对每个已选节点，取所有入边(from→id)的源节点 from 并入选中 —— 沿入边方向(向上/上游)
+ *  dir>0（句点 .）：对每个已选节点，取所有出边(id→to)的目标节点 to 并入选中 —— 沿出边方向(向下/下游)
+ *  累积式（并集，不清空现有选中）；toClosure 时重复到不动点（对齐 Ctrl+,/Ctrl+. 全部闭包）。
+ */
+function selectAlongEdges(dir, toClosure) {
+  let frontier = new Set(selectedIds);
+  let guard = 0;
+  for (;;) {
+    const add = new Set();
+    for (const id of frontier) {
+      for (const e of state.edges) {
+        if ((dir < 0 && e.to === id) || (dir > 0 && e.from === id)) add.add(dir < 0 ? e.from : e.to);
+      }
+    }
+    let addedAny = false;
+    for (const x of add) if (!selectedIds.has(x)) { selectedIds.add(x); addedAny = true; }
+    if (!toClosure || !addedAny || add.size === 0) break;
+    frontier = add;
+    if (++guard > 100000) break;
+  }
+  if (activeId == null || !selectedIds.has(activeId)) activeId = selectedIds.values().next().value ?? null;
+  syncSelectionUI();
+  applyHighlights();
 }
 /** 切换单个节点的选中态（单击）。 */
 function toggleSelect(id) {
