@@ -233,6 +233,33 @@ RETURN p LIMIT 20
 - `数据∩嵌套`@调用点：数据流到实参 且 实例引用同一调用点——**双尾汇聚**（README 相交例子的图库版）
 - `逻辑∩嵌套`@调用点：逻辑到调用点 且 嵌套引用同一调用点——**双尾汇聚**
 
+### 11.3 未纳入五个维度的边
+
+五维度只覆盖"可沿之搜索的方向"（流动/传递），图模型里还有一批边不在其中，分两类：
+
+**一、结构性 / 类型层次边（不承载搜索方向，是图模型的"骨架"）**
+
+| 边 | 起点→终点 | 作用 | 用途 |
+| --- | --- | --- | --- |
+| `DECLARES` | `Class→Method\|:Field` | 声明成员 | 类范围：找某类的字段/方法 |
+| `HAS_PARAM` | `Method→Value`（PARAM） | 方法形参 | `Parameter` 正则字符绑定 |
+| `RETURNS` | `Method→Value`（RETURN） | 方法返回值 | `Return` 正则字符绑定 |
+| `EXTENDS`/`IMPLEMENTS` | `Class→Class` | 继承/实现 | **类型层次/类范围**（super/sub/ancestors/descendants） |
+| `OVERRIDES` | `Method→Method` | 覆写 | **多态**：时机/数据维度的 override 变体（`polymorphism` preset） |
+| `TYPED_BY` | `Value→Class` | 成员静态类型 | 类型标注（`instanceOf`） |
+
+**二、调用点"接头"边（服务于维度交接，本身不成维度）**
+
+| 边 | 起点→终点 | 作用 |
+| --- | --- | --- |
+| `ARG_OF` | `Value`（CALLED_PARAM）→`CalledMethod` | 实参进出调用点——数据维度的接头 |
+| `RET_OF` | `Value`（CALLED_RETURN）→`CalledMethod` | 返回使用进出调用点——数据维度的接头 |
+| `SCOPED_BY` | `Value`/`CalledMethod`→`Condition` | 把运行时节点/调用点锚定到其包围分支——逻辑/时机解析的锚 |
+
+> 结论：五维度=流动/传递方向（`CALLS`/`FLOWS`/条件树/`REF`/`INDEX`/`NEXT`）；
+> 未纳入的或是静态结构与类型层次（`DECLARES`/`HAS_PARAM`/`RETURNS`/`EXTENDS`/`IMPLEMENTS`/`TYPED_BY`/`OVERRIDES`）——
+> 为维度提供节点集合与类型信息，或是维度交接的接头/锚（`ARG_OF`/`RET_OF`/`SCOPED_BY`）。
+
 ## 12. 已实现 / 待实现对照
 
 | 搜索类型 | 状态 |
