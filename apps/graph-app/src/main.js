@@ -532,8 +532,8 @@ function nodeColorFor(id, out) {
   if (flowColorActive) {
     const r = flowColorRatio.get(id) ?? 0;
     out.copy(FLOW_START).lerp(FLOW_END, r);
+    // 选中不改颜色（对齐旧项目：选中仅 alpha 提到 1.0 变不透明，颜色保持），仅悬停轻微提亮
     if (hov) out.lerp(_NODE_WHITE, 0.35);
-    if (sel) out.lerp(_NODE_WHITE, 0.75);
   } else {
     const g = sel ? (hov ? 1.0 : 0.9) : (hov ? 0.55 : 0.28);
     out.setRGB(g, g, g);
