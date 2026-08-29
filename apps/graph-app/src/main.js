@@ -275,8 +275,8 @@ function updateNodeColors() {
   if (nodeMesh.instanceColor) nodeMesh.instanceColor.needsUpdate = true;
 }
 
-// ---------- 自动上色：按流 color-by-flow（对齐旧项目 Ctrl+H flowColor） ----------
-let flowColorActive = false;
+// ---------- 自动上色：按流 color-by-flow（对齐旧项目 Ctrl+H flowColor / Ctrl+Alt+H 清除未选中） ----------
+const flowColored = new Set(); // 当前带流色的节点集合（对齐旧 nodesObj->colorSpecified）
 const flowColorRatio = new Map(); // nodeId -> 0..1（节点在流向中的纵向位置）
 const FLOW_START = new THREE.Color(0.85, 0.85, 0); // 黄
 const FLOW_END = new THREE.Color(1, 0, 1);         // 洋红
@@ -333,11 +333,15 @@ function peelLayers(ids, inCountRef, outRef) {
 
 function enableFlowColor() {
   computeFlowColors();
-  flowColorActive = true;
+  // 对齐旧 flowColor()：默认给所有节点上流色（不覆盖已有指定颜色——当前仅流色，故全加）
+  for (const n of state.nodes) flowColored.add(n.id);
   applyHighlights();
 }
-function clearAllColor() {
-  flowColorActive = false;
+/** 对齐旧 clearSpecifiedColor()（Ctrl+Alt+H）：清除未选中节点的颜色，选中的保留。 */
+function clearUnselectedColor() {
+  for (const id of [...flowColored]) {
+    if (!selectedIds.has(id)) flowColored.delete(id);
+  }
   applyHighlights();
 }
 
@@ -356,7 +360,7 @@ function initMenubar() {
   });
   document.addEventListener("click", (e) => { if (!bar.contains(e.target)) closeAll(); });
   document.getElementById("mi-flow-color").addEventListener("click", () => { closeAll(); enableFlowColor(); });
-  document.getElementById("mi-clear-color").addEventListener("click", () => { closeAll(); clearAllColor(); });
+  document.getElementById("mi-clear-color").addEventListener("click", () => { closeAll(); clearUnselectedColor(); });
   // 沿边选点（对齐旧 selectUpward/selectDownward 及 Ctrl 闭包版）
   document.getElementById("mi-sel-up").addEventListener("click", () => { closeAll(); selectAlongEdges(-1, false); });
   document.getElementById("mi-sel-down").addEventListener("click", () => { closeAll(); selectAlongEdges(1, false); });
@@ -529,7 +533,7 @@ const _NODE_WHITE = new THREE.Color(1, 1, 1);
 function nodeColorFor(id, out) {
   const sel = selectedIds.has(id) || highlightIds.has(id);
   const hov = hoverId === id;
-  if (flowColorActive) {
+  if (flowColored.has(id)) {
     const r = flowColorRatio.get(id) ?? 0;
     out.copy(FLOW_START).lerp(FLOW_END, r);
     // 选中不改颜色（对齐旧项目：选中仅 alpha 提到 1.0 变不透明，颜色保持），仅悬停轻微提亮
@@ -879,16 +883,17 @@ function setupInteraction() {
     if (id) startFlowFrom(id, e.shiftKey);
   });
 
-  // 数字键 5-9（+单击 = 按跳数选邻居）；Ctrl+H 自动上色 / Ctrl+Alt+8 清除
+  // 数字键 5-9（+单击 = 按跳数选邻居）；Ctrl+H 自动上色 / Ctrl+Shift+H 清除未选中节点颜色
   window.addEventListener("keydown", (e) => {
     if (isTypingTarget(e)) return;
     if (/^[5-9]$/.test(e.key)) keysHeld.add(e.key);
-    if (e.ctrlKey && !e.altKey && e.key.toLowerCase() === "h") {
+    if (e.ctrlKey && !e.altKey && !e.shiftKey && e.key.toLowerCase() === "h") {
       e.preventDefault();
       enableFlowColor();
-    } else if (e.ctrlKey && e.altKey && e.key === "8") {
+    } else if (e.ctrlKey && e.shiftKey && !e.altKey && e.key.toLowerCase() === "h") {
+      // Ctrl+Shift+H：清除未选中节点的颜色（对齐旧 clearSpecifiedColor；用 Shift 而非 Alt，Mac 通用）
       e.preventDefault();
-      clearAllColor();
+      clearUnselectedColor();
     } else if (e.key === ",") {
       // 沿入边方向(上游)逐跳选中；Ctrl+, 走到上游全部闭包
       e.preventDefault();
