@@ -370,19 +370,28 @@ function initMenubar() {
 
 /** 标签只显示在选中/悬停节点上 */
 function makeLabel(text) {
+  const label = text.length > 22 ? text.slice(0, 22) + "…" : text;
+  const fontPx = 64; // 大字号（相对节点更醒目）
+  const padX = 16, padY = 12;
+  const probe = document.createElement("canvas").getContext("2d");
+  probe.font = `${fontPx}px system-ui, sans-serif`;
+  const textW = Math.ceil(probe.measureText(label).width);
   const canvas = document.createElement("canvas");
-  canvas.width = 256;
-  canvas.height = 64;
+  canvas.width = textW + padX * 2;
+  canvas.height = fontPx + padY * 2; // 字号 + 上下留白
   const ctx = canvas.getContext("2d");
-  ctx.font = "26px system-ui, sans-serif";
+  ctx.font = `${fontPx}px system-ui, sans-serif`;
   ctx.fillStyle = "#e6edf3";
   ctx.textBaseline = "middle";
-  ctx.fillText(text.length > 22 ? text.slice(0, 22) + "…" : text, 8, 32);
+  ctx.fillText(label, padX, canvas.height / 2);
   const tex = new THREE.CanvasTexture(canvas);
   const mat = new THREE.SpriteMaterial({ map: tex, transparent: true, depthTest: false });
   const sprite = new THREE.Sprite(mat);
   sprite.renderOrder = 2; // 标签始终画在最上层（高于节点 renderOrder=1，避免被节点盘盖住）
-  sprite.scale.set(5, 1.6, 1);
+  // 使文字在世界坐标里的高度 ≈ 1.5，宽高比随文本长度变化
+  const worldH = 1.5;
+  const k = worldH / canvas.height;
+  sprite.scale.set(canvas.width * k, worldH, 1);
   return sprite;
 }
 
@@ -625,8 +634,7 @@ function updateLabelPositions() {
   for (const [id, lab] of nodeLabels) {
     const v = nodePos.get(id);
     if (!v) continue;
-    const s = nodeScale.get(id) || 1;
-    lab.position.copy(v).add(_v1.set(0, s * 0.9, 0));
+    lab.position.copy(v); // 标签中心与节点中心对齐
   }
 }
 
