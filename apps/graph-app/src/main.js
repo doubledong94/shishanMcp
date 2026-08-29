@@ -44,8 +44,7 @@ let nodeLabels = new Map(); // node id -> Sprite（仅选中/悬停显示）
 let nodesById = new Map(); // id -> node
 let nodePos = new Map(); // id -> THREE.Vector3
 let edgeMesh = null; // InstancedMesh（相机朝向带状边 + 流光）
-let edgeData = []; // {from,to} 与实例索引对齐
-let edgeFlow = new Float32Array(0); // 每实例 flow（-2 表示无流光）
+let edgeData = []; // {from,to}，与边缓冲索引对齐
 let state = { nodes: [], edges: [] };
 let selectedIds = new Set(); // 多选集合（对齐旧项目 nodesObj->selected）
 let hoverId = null;
@@ -162,7 +161,34 @@ const NODE_STYLE = {
   SELHOV:{ gray: 1.0,  alpha: 1.0 },
 };
 
-/** 重新构建节点 InstancedMesh（不透明实心圆盘 + 每实例颜色，绕开 Sprite/uniform 路径） */
+// ---- 节点 ShaderMaterial：对齐旧 Nodes.cpp 的两态 alpha ----
+// 选中/悬停位编码进 instanceColor 低位（r+=0.002 选中，g+=0.002 悬停），顶点解码后由
+// 片段选 alpha：选中 1.0（不透明），未选中 0.3（半透明），悬停 alpha+0.2。
+// instanceMatrix / instanceColor 由 three 对 InstancedMesh 的 ShaderMaterial 自动声明注入。
+const NODE_VERT = `
+varying vec3 vColor;
+varying float vSel;
+varying float vHov;
+void main() {
+  float pr = fract(fract(instanceColor.r) * 100.0);
+  vSel = (pr > 0.1 && pr < 0.3) ? 1.0 : 0.0;
+  float pg = fract(fract(instanceColor.g) * 100.0);
+  vHov = (pg > 0.1 && pg < 0.3) ? 1.0 : 0.0;
+  vColor = instanceColor;
+  gl_Position = projectionMatrix * modelViewMatrix * instanceMatrix * vec4(position, 1.0);
+}`;
+const NODE_FRAG = `
+varying vec3 vColor;
+varying float vSel;
+varying float vHov;
+void main() {
+  vec3 color = vColor;
+  float alpha = vSel > 0.5 ? 1.0 : 0.3;
+  if (vHov > 0.5) alpha += 0.2; // 悬停 alpha +0.2（对齐旧 Nodes）
+  gl_FragColor = vec4(color, min(alpha, 1.0));
+}`;
+
+/** 重新构建节点 InstancedMesh（圆盘 + 每实例颜色与两态 alpha，对齐旧 Nodes.cpp） */
 function rebuildNodes() {
   const ids = state.nodes.map((n) => n.id);
   if (nodeMesh) { graphGroup.remove(nodeMesh); nodeMesh.geometry.dispose(); nodeMesh.material.dispose(); nodeMesh = null; }
@@ -173,13 +199,16 @@ function rebuildNodes() {
   ids.forEach((id, i) => nodeIx.set(id, i));
   if (ids.length === 0) return;
   const geo = new THREE.CircleGeometry(1, 24);
-  const mat = new THREE.MeshBasicMaterial({ color: 0xffffff }); // 每实例颜色覆盖
+  // 对齐旧项目：节点 ShaderMaterial 支持 per-instance alpha（选中 1.0 / 未选中 0.3）。
+  // transparent+depthTest=false，与边同处透明 pass，靠 renderOrder（节点=1 > 边=0）后画盖住边。
+  const mat = new THREE.ShaderMaterial({ vertexShader: NODE_VERT, fragmentShader: NODE_FRAG, transparent: true, depthTest: false, depthWrite: false, side: THREE.DoubleSide, uniforms: {} });
   nodeMesh = new THREE.InstancedMesh(geo, mat, ids.length);
   const c = new THREE.Color(0.3, 0.3, 0.3);
   for (let i = 0; i < ids.length; i++) {
     nodeScale.set(ids[i], nodeScale.get(ids[i]) || 1);
     nodeMesh.setColorAt(i, c);
   }
+  nodeMesh.renderOrder = 1; // 比边(renderOrder 0)晚画：节点圆盘盖住经过它的边（节点挡边）
   graphGroup.add(nodeMesh);
   // 标签（仅选中/悬停显示）
   for (const n of state.nodes) {
@@ -207,27 +236,24 @@ function updateNodePositions() {
   nodeMesh.instanceMatrix.needsUpdate = true;
 }
 
-/** 选中/悬停 → 每实例颜色（不透明实心盘，未选中暗灰、选中亮灰） */
+/** 选中/悬停 → 每实例颜色 + 编码两态位（对齐旧 Nodes::applyColor；alpha 由节点着色器按位解码） */
 function updateNodeColors() {
   if (!nodeMesh) return;
   const c = new THREE.Color();
   for (let i = 0; i < instNode.length; i++) {
     const id = instNode[i];
+    nodeColorFor(id, c);
+    // 量化到 0.01，保证 encode/decode 位稳定（fract(fract(channel)*100) 判定不串位）
+    c.r = Math.round(c.r * 100) / 100;
+    c.g = Math.round(c.g * 100) / 100;
+    c.b = Math.round(c.b * 100) / 100;
     const sel = selectedIds.has(id) || highlightIds.has(id);
     const hov = hoverId === id;
-    if (flowColorActive) {
-      // 自动上色：按流位置 黄→洋红 渐变（对齐旧项目 Ctrl+H color-by-flow），选中/悬停额外提亮
-      const r = flowColorRatio.get(id) ?? 0;
-      c.copy(FLOW_START).lerp(FLOW_END, r);
-      if (hov) c.lerp(_FLOW_WHITE, 0.35);
-      if (sel) c.lerp(_FLOW_WHITE, 0.75);
-    } else {
-      const g = sel ? (hov ? 1.0 : 0.9) : (hov ? 0.55 : 0.28);
-      c.setRGB(g, g, g);
-    }
+    if (sel) c.r += 0.002; // 选中位（对齐旧 encodeIntoRgb(0.2/100)）
+    if (hov) c.g += 0.002; // 悬停位
     nodeMesh.setColorAt(i, c);
     const lab = nodeLabels.get(id);
-    if (lab) lab.visible = sel || hov;
+    if (lab) lab.visible = selectedIds.has(id) || highlightIds.has(id) || hoverId === id;
   }
   if (nodeMesh.instanceColor) nodeMesh.instanceColor.needsUpdate = true;
 }
@@ -329,111 +355,168 @@ function makeLabel(text) {
   const tex = new THREE.CanvasTexture(canvas);
   const mat = new THREE.SpriteMaterial({ map: tex, transparent: true, depthTest: false });
   const sprite = new THREE.Sprite(mat);
+  sprite.renderOrder = 2; // 标签始终画在最上层（高于节点 renderOrder=1，避免被节点盘盖住）
   sprite.scale.set(5, 1.6, 1);
   return sprite;
 }
 
 // ---------- 边：相机朝向扁平带状 + 流光（移植旧 FlowLine） ----------
 // 每个实例是一张 1x1 平面，每帧按两端点+朝向相机定位；uv.x 沿边方向（供流光），uv.y 横跨宽度。
+// ---------- 边：相机朝向扁平带 + 流光（复刻旧项目 FlowLine） ----------
+// 旧实现：每条边 = 4 顶点四边形（start,end,end,start），顶点着色器在 GPU 上用
+// cross(dir, cameraDir)*lineHalfWidth 做「朝向相机的宽度扩张」（相机只需一个 uniform）；
+// 颜色 = 两端点节点色的平滑渐变（顶点0,3=起点色，1,2=终点色；四边形内线性插值即为沿长度的渐变）；
+// flow 属性 > -1.5 时画一段移动亮带（起点侧=flow，终点侧=flow-1）。
+// 对齐旧项目：边 transparent+depthTest=false，与节点同处透明 pass，节点 renderOrder=1 更后画 → 圆盘盖住边。
+const EDGE_CAP = 20000; // 预分配容量（对齐旧 FlowLine::edgeCapacity）
+const EDGE_HALF_WIDTH = 1.4; // 每侧半宽；总宽 ≈ 2*half
+
 const EDGE_VERT = `
-attribute float aFlow;
-varying float vUvx;
-varying float vUvy;
+attribute vec3 edgePos;
+attribute vec3 edgeDir;
+attribute vec3 edgeColor;
+attribute vec2 edgeUv;
+attribute float edgeFlow;
+uniform float lineHalfWidth;
+uniform vec3 camDir;
+varying vec2 vUv;
+varying vec3 vColor;
 varying float vFlow;
 void main() {
-  vUvx = uv.x;
-  vUvy = uv.y;
-  vFlow = aFlow;
-  gl_Position = projectionMatrix * modelViewMatrix * instanceMatrix * vec4(position, 1.0);
+  vUv = edgeUv;
+  vColor = edgeColor;
+  vFlow = edgeFlow;
+  vec3 nd = normalize(cross(edgeDir, camDir) + vec3(1e-5));
+  gl_Position = projectionMatrix * modelViewMatrix * vec4(edgePos + nd * lineHalfWidth, 1.0);
 }`;
 const EDGE_FRAG = `
-varying float vUvx;
-varying float vUvy;
+varying vec2 vUv;
+varying vec3 vColor;
 varying float vFlow;
+uniform float alphaEdge;
 void main() {
-  // 统一浅蓝（0x6cb6ff）。注意：ShaderMaterial 的片段着色器里没有
-  // USE_INSTANCING_COLOR（three 只注入到顶点前缀），所以不能用 instanceColor，
-  // 直接硬编码边色，避免整个 main 被 #ifdef 预处理掉导致无片段程序。
-  vec3 c = vec3(0.42, 0.71, 1.0);
-  // 方向明暗：uv.y 大于中线一侧微亮，模拟 FlatLine 的方向暗示
-  float shade = (vUvy > 0.5) ? 1.16 : 0.9;
-  vec3 outC = c * shade;
-  // 流光：vFlow 在 [0,1] 时画一段移动亮带
-  float flow = vFlow;
-  if (flow >= 0.0 && flow <= 1.0) {
-    float band = 0.95 * smoothstep(0.16, 0.0, abs(vUvx - flow));
-    outC += band * vec3(1.0, 1.0, 0.92);
+  vec3 color = vColor;
+  // 流光：vFlow > -1.5 时画一段移动暗带（对齐旧 FlowLine）
+  if (vFlow > -1.5) {
+    float f = 0.8 * smoothstep(0.2, 0.0, abs(vFlow));
+    color -= vec3(f);
   }
-  gl_FragColor = vec4(outC, 0.9);
+  gl_FragColor = vec4(color, alphaEdge);
 }`;
+
+let edgeGeo = null; // 动态 BufferGeometry（容量预分配，写入活跃边的 4 顶点）
+let ePosArr = null, eDirArr = null, eColArr = null, eUvArr = null, eFlowArr = null;
 
 function rebuildEdges() {
   const edges = state.edges.filter((e) => nodePos.has(e.from) && nodePos.has(e.to));
   edgeData = edges.map((e) => ({ from: e.from, to: e.to }));
   if (edgeMesh) {
     graphGroup.remove(edgeMesh);
-    edgeMesh.geometry.dispose();
-    edgeMesh.material.dispose();
+    if (edgeGeo) edgeGeo.dispose();
     edgeMesh = null;
+    edgeGeo = null;
   }
   const count = edgeData.length;
   if (count === 0) return;
-  const geo = new THREE.PlaneGeometry(1, 1);
-  edgeFlow = new Float32Array(count).fill(-2);
-  geo.setAttribute("aFlow", new THREE.InstancedBufferAttribute(edgeFlow, 1));
+  const cap = Math.max(EDGE_CAP, count);
+  const V = cap * 4;
+  edgeGeo = new THREE.BufferGeometry();
+  ePosArr = new Float32Array(V * 3);
+  eDirArr = new Float32Array(V * 3);
+  eColArr = new Float32Array(V * 3);
+  eUvArr = new Float32Array(V * 2);
+  eFlowArr = new Float32Array(V).fill(-2); // -2 = 无流光
+  // uv：每边 (-1,-1),(-1,1),(1,1),(1,-1)
+  for (let i = 0; i < cap; i++) {
+    const b = i * 4;
+    eUvArr[(b + 0) * 2 + 0] = -1; eUvArr[(b + 0) * 2 + 1] = -1;
+    eUvArr[(b + 1) * 2 + 0] = -1; eUvArr[(b + 1) * 2 + 1] = 1;
+    eUvArr[(b + 2) * 2 + 0] = 1; eUvArr[(b + 2) * 2 + 1] = 1;
+    eUvArr[(b + 3) * 2 + 0] = 1; eUvArr[(b + 3) * 2 + 1] = -1;
+  }
+  edgeGeo.setAttribute("edgePos", new THREE.BufferAttribute(ePosArr, 3));
+  edgeGeo.setAttribute("edgeDir", new THREE.BufferAttribute(eDirArr, 3));
+  edgeGeo.setAttribute("edgeColor", new THREE.BufferAttribute(eColArr, 3));
+  edgeGeo.setAttribute("edgeUv", new THREE.BufferAttribute(eUvArr, 2));
+  edgeGeo.setAttribute("edgeFlow", new THREE.BufferAttribute(eFlowArr, 1));
+  const idx = new Uint32Array(cap * 6);
+  for (let i = 0; i < cap; i++) {
+    const b = i * 4, o = i * 6;
+    idx[o + 0] = b; idx[o + 1] = b + 1; idx[o + 2] = b + 2;
+    idx[o + 3] = b + 2; idx[o + 4] = b + 3; idx[o + 5] = b;
+  }
+  edgeGeo.setIndex(new THREE.BufferAttribute(idx, 1));
   const mat = new THREE.ShaderMaterial({
     vertexShader: EDGE_VERT,
     fragmentShader: EDGE_FRAG,
-    transparent: true,
+    transparent: true, // 对齐旧 FlowLine：transparent=true + depthTest=false，纯绘制顺序遮挡
     depthWrite: false,
-    depthTest: false, // 连线永远画在最上层，避免被节点圆盘遮挡（保证密图连线可见）
+    depthTest: false,
+    side: THREE.DoubleSide,
+    uniforms: {
+      lineHalfWidth: { value: EDGE_HALF_WIDTH },
+      camDir: { value: new THREE.Vector3(0, 0, -1) },
+      alphaEdge: { value: 0.95 },
+    },
   });
-  edgeMesh = new THREE.InstancedMesh(geo, mat, count);
-  const color = new THREE.Color();
-  edgeData.forEach((e, i) => {
-    // 边用浅蓝，与灰色圆盘拉开对比，密图下连线更易辨
-    color.setHex(0x6cb6ff);
-    edgeMesh.setColorAt(i, color);
-  });
+  edgeMesh = new THREE.Mesh(edgeGeo, mat);
+  edgeMesh.frustumCulled = false; // 动态增量规模，避免整批被视锥裁剪
   graphGroup.add(edgeMesh);
 }
 
-function updateEdgeMatrices() {
-  if (!edgeMesh) return;
-  const camPos = camera.position;
-  for (let i = 0; i < edgeData.length; i++) {
+/** 每帧：把当前节点位置/颜色写进边缓冲（跟随力导向移动 / 选中高亮与流上色）。 */
+function updateEdgeBuffers() {
+  if (!edgeMesh || !edgeGeo) return;
+  const n = edgeData.length;
+  for (let i = 0; i < n; i++) {
     const e = edgeData[i];
-    const a = nodePos.get(e.from);
-    const b = nodePos.get(e.to);
-    if (!a || !b) {
-      _dummy.position.set(0, 0, 0);
-      _dummy.scale.setScalar(0);
-      _dummy.updateMatrix();
-      edgeMesh.setMatrixAt(i, _dummy.matrix);
-      continue;
-    }
-    _v1.copy(b).sub(a);
-    const len = _v1.length();
-    if (len < 1e-6) {
-      _dummy.position.set(0, 0, 0);
-      _dummy.scale.setScalar(0);
-      _dummy.updateMatrix();
-      edgeMesh.setMatrixAt(i, _dummy.matrix);
-      continue;
-    }
-    const dir = _v1.divideScalar(len);
-    _v2.copy(a).add(b).multiplyScalar(0.5); // 中点
-    // 宽度轴 = 垂直(指向相机方向 × 边方向)，使其朝向相机
-    _v3.copy(camPos).sub(_v2);
-    _v4.copy(_v3).cross(dir);
-    if (_v4.lengthSq() < 1e-8) _v4.set(0, 1, 0);
-    _v4.normalize();
-    const thickness = 2.5;
-    _m.makeBasis(dir.clone().multiplyScalar(len), _v4.clone().multiplyScalar(thickness), _v3.clone().cross(dir).normalize());
-    _m.setPosition(_v2);
-    edgeMesh.setMatrixAt(i, _m);
+    const a = nodePos.get(e.from), b = nodePos.get(e.to);
+    const o = i * 4;
+    if (!a || !b) continue;
+    // 位置：顶点0,3=起点 a；顶点1,2=终点 b
+    ePosArr[(o + 0) * 3] = a.x; ePosArr[(o + 0) * 3 + 1] = a.y; ePosArr[(o + 0) * 3 + 2] = a.z;
+    ePosArr[(o + 1) * 3] = b.x; ePosArr[(o + 1) * 3 + 1] = b.y; ePosArr[(o + 1) * 3 + 2] = b.z;
+    ePosArr[(o + 2) * 3] = b.x; ePosArr[(o + 2) * 3 + 1] = b.y; ePosArr[(o + 2) * 3 + 2] = b.z;
+    ePosArr[(o + 3) * 3] = a.x; ePosArr[(o + 3) * 3 + 1] = a.y; ePosArr[(o + 3) * 3 + 2] = a.z;
+    // 方向：起点→终点（顶点0,1），终点→起点（顶点2,3）；着色器里 normalize 后只取朝向，长度无关
+    const dx = b.x - a.x, dy = b.y - a.y, dz = b.z - a.z;
+    eDirArr[(o + 0) * 3] = dx; eDirArr[(o + 0) * 3 + 1] = dy; eDirArr[(o + 0) * 3 + 2] = dz;
+    eDirArr[(o + 1) * 3] = dx; eDirArr[(o + 1) * 3 + 1] = dy; eDirArr[(o + 1) * 3 + 2] = dz;
+    eDirArr[(o + 2) * 3] = -dx; eDirArr[(o + 2) * 3 + 1] = -dy; eDirArr[(o + 2) * 3 + 2] = -dz;
+    eDirArr[(o + 3) * 3] = -dx; eDirArr[(o + 3) * 3 + 1] = -dy; eDirArr[(o + 3) * 3 + 2] = -dz;
+    // 颜色：端点节点色渐变（起点色在顶点0,3，终点色在1,2），对齐旧 FlowLine::setColors
+    nodeColorFor(e.from, _EDGE_C0);
+    nodeColorFor(e.to, _EDGE_C1);
+    eColArr[(o + 0) * 3] = _EDGE_C0.r; eColArr[(o + 0) * 3 + 1] = _EDGE_C0.g; eColArr[(o + 0) * 3 + 2] = _EDGE_C0.b;
+    eColArr[(o + 3) * 3] = _EDGE_C0.r; eColArr[(o + 3) * 3 + 1] = _EDGE_C0.g; eColArr[(o + 3) * 3 + 2] = _EDGE_C0.b;
+    eColArr[(o + 1) * 3] = _EDGE_C1.r; eColArr[(o + 1) * 3 + 1] = _EDGE_C1.g; eColArr[(o + 1) * 3 + 2] = _EDGE_C1.b;
+    eColArr[(o + 2) * 3] = _EDGE_C1.r; eColArr[(o + 2) * 3 + 1] = _EDGE_C1.g; eColArr[(o + 2) * 3 + 2] = _EDGE_C1.b;
   }
-  edgeMesh.instanceMatrix.needsUpdate = true;
+  edgeGeo.setDrawRange(0, n * 6);
+  edgeGeo.attributes.edgePos.needsUpdate = true;
+  edgeGeo.attributes.edgeDir.needsUpdate = true;
+  edgeGeo.attributes.edgeColor.needsUpdate = true;
+}
+
+const _EDGE_C0 = new THREE.Color();
+const _EDGE_C1 = new THREE.Color();
+const _EDGE_CAMDIR = new THREE.Vector3();
+
+/** 节点当前视觉色（正常模式灰度 / 流上色模式渐变，选中/悬停提亮）。节点与边共用，保证边色随节点色。 */
+const _NODE_WHITE = new THREE.Color(1, 1, 1);
+function nodeColorFor(id, out) {
+  const sel = selectedIds.has(id) || highlightIds.has(id);
+  const hov = hoverId === id;
+  if (flowColorActive) {
+    const r = flowColorRatio.get(id) ?? 0;
+    out.copy(FLOW_START).lerp(FLOW_END, r);
+    if (hov) out.lerp(_NODE_WHITE, 0.35);
+    if (sel) out.lerp(_NODE_WHITE, 0.75);
+  } else {
+    const g = sel ? (hov ? 1.0 : 0.9) : (hov ? 0.55 : 0.28);
+    out.setRGB(g, g, g);
+  }
+  return out;
 }
 
 // ---------- 布局：连续力导向仿真（移植旧 FR，让节点涌动沉降） ----------
@@ -831,6 +914,17 @@ function focusNode(id) {
   }
 }
 
+/** 写某条边的 flow 属性：起点侧=v、终点侧=v-1（对齐旧 FlowLine::onFlowChangedImpl）；v=-2 表示无流光。 */
+function setEdgeFlow(idx, v) {
+  if (!edgeGeo || !edgeGeo.attributes.edgeFlow) return;
+  const o = idx * 4;
+  eFlowArr[o + 0] = v;
+  eFlowArr[o + 3] = v;
+  eFlowArr[o + 1] = v - 1;
+  eFlowArr[o + 2] = v - 1;
+  edgeGeo.attributes.edgeFlow.needsUpdate = true;
+}
+
 /** 边流光脉冲：沿「该节点 → 选中邻居」的边传播，到达端点再级联（穿越选中子图）。 */
 function startFlowFrom(id, backward = false) {
   const edges = state.edges;
@@ -850,17 +944,14 @@ function animateFlowEdge(idx, targetId, cascade, backward) {
   // backward = 反向流光（shift+右键）
   const from = backward ? 1 : 0;
   const to = backward ? 0 : 1;
-  edgeFlow[idx] = from;
-  edgeMesh.instanceMatrix.needsUpdate = true;
+  setEdgeFlow(idx, from);
   tween.add({
     from, to, duration: 550, ease: sineInOut,
     onUpdate: (v) => {
-      edgeFlow[idx] = v;
-      edgeMesh.instanceMatrix.needsUpdate = true;
+      setEdgeFlow(idx, v);
     },
     onEnd: () => {
-      edgeFlow[idx] = -2;
-      edgeMesh.instanceMatrix.needsUpdate = true;
+      setEdgeFlow(idx, -2);
       if (cascade) startFlowFrom(targetId, backward); // 级联到下一跳
     },
   });
@@ -914,7 +1005,12 @@ function animate(now) {
     if ((densityTick & 7) === 0) updateScaleByDistance();
     updateLabelPositions();
     applyHighlights();
-    updateEdgeMatrices();
+    // 边：更新相机朝向 uniform（GPU 侧做 Billboard）+ 动态缓冲（跟随节点位移/颜色）
+    updateEdgeBuffers();
+    if (edgeMesh) {
+      camera.getWorldDirection(_EDGE_CAMDIR);
+      edgeMesh.material.uniforms.camDir.value.copy(_EDGE_CAMDIR);
+    }
     cameraForMode();
     if (layoutMode === "3d") controls.update();
     renderer.render(scene, camera); // 关键：渲染也包进 try，出错打日志不冻结画布
@@ -937,8 +1033,9 @@ function clearGraph() {
   nodesById.clear();
   nodePos.clear();
   edgeMesh = null;
+  edgeGeo = null;
   edgeData = [];
-  edgeFlow = new Float32Array(0);
+  ePosArr = eDirArr = eColArr = eUvArr = eFlowArr = null;
   state = { nodes: [], edges: [] };
   selectedIds = new Set();
   activeId = null;
