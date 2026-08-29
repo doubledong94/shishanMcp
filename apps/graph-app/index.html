@@ -54,9 +54,41 @@
       .result-box .result-row:last-child { border-bottom: none; }
       .result-box .result-row b { color: #58a6ff; font-weight: 600; }
 
+      /* ---------- 顶部菜单栏（IDE 风格：标题 + 下拉 + 右侧快捷键） ---------- */
+      .menubar {
+        position: fixed; top: 0; left: 0; z-index: 60;
+        display: flex; align-items: center; gap: 2px;
+        background: #161b22; border-bottom: 1px solid #30363d;
+        padding: 0 6px; height: 34px; font-size: 13px; user-select: none;
+      }
+      .menu { position: relative; }
+      .menu-title {
+        background: none; border: none; color: #c9d1d9;
+        padding: 6px 12px; cursor: pointer; font-size: 13px; border-radius: 4px;
+      }
+      .menu-title:hover, .menu.open .menu-title { background: #21262d; color: #e6edf3; }
+      .menu-dropdown {
+        position: absolute; top: 100%; left: 0; min-width: 240px;
+        background: #161b22; border: 1px solid #30363d; border-radius: 6px;
+        padding: 4px; display: none; box-shadow: 0 8px 24px rgba(0,0,0,.45);
+      }
+      .menu.open .menu-dropdown { display: block; }
+      .menu-item {
+        display: flex; align-items: center; justify-content: space-between; gap: 24px;
+        width: 100%; background: none; border: none; color: #c9d1d9;
+        padding: 6px 10px; text-align: left; font-size: 13px; cursor: pointer; border-radius: 4px;
+      }
+      .menu-item:hover { background: #1f6feb; color: #fff; }
+      .menu-item .kbd {
+        color: #8b949e; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 12px; border: 1px solid #30363d; border-radius: 3px;
+        padding: 0 6px; background: #0d1117; white-space: nowrap;
+      }
+      .menu-item:hover .kbd { color: #e6edf3; border-color: rgba(255,255,255,.5); background: #1f6feb; }
+
       /* ---------- 左侧代码查看器侧边栏 ---------- */
       .code-toggle {
-        position: fixed; top: 12px; left: 0; z-index: 30;
+        position: fixed; top: 44px; left: 0; z-index: 30;
         background: #238636; color: #fff; border: none; border-radius: 0 6px 6px 0;
         padding: 10px 8px; cursor: pointer; font-size: 13px; writing-mode: vertical-rl;
         letter-spacing: 2px;
@@ -175,6 +207,18 @@
   </head>
   <body>
     <div id="app"></div>
+
+    <!-- 顶部菜单栏（IDE 风格） -->
+    <nav id="menubar" class="menubar">
+      <div class="menu" id="menu-graph">
+        <button class="menu-title" data-menu="menu-graph" title="图谱操作">上色</button>
+        <div class="menu-dropdown">
+          <button class="menu-item" id="mi-flow-color">按流自动上色<span class="kbd">Ctrl+H</span></button>
+          <button class="menu-item" id="mi-clear-color">清除所有上色<span class="kbd">Ctrl+Alt+8</span></button>
+        </div>
+      </div>
+    </nav>
+
     <div class="panel">
       <h1>代码图谱 3D</h1>
       <label for="project">项目</label>

@@ -215,13 +215,105 @@ function updateNodeColors() {
     const id = instNode[i];
     const sel = selectedIds.has(id) || highlightIds.has(id);
     const hov = hoverId === id;
-    const g = sel ? (hov ? 1.0 : 0.9) : (hov ? 0.55 : 0.28);
-    c.setRGB(g, g, g);
+    if (flowColorActive) {
+      // 自动上色：按流位置 黄→洋红 渐变（对齐旧项目 Ctrl+H color-by-flow），选中/悬停额外提亮
+      const r = flowColorRatio.get(id) ?? 0;
+      c.copy(FLOW_START).lerp(FLOW_END, r);
+      if (hov) c.lerp(_FLOW_WHITE, 0.35);
+      if (sel) c.lerp(_FLOW_WHITE, 0.75);
+    } else {
+      const g = sel ? (hov ? 1.0 : 0.9) : (hov ? 0.55 : 0.28);
+      c.setRGB(g, g, g);
+    }
     nodeMesh.setColorAt(i, c);
     const lab = nodeLabels.get(id);
     if (lab) lab.visible = sel || hov;
   }
   if (nodeMesh.instanceColor) nodeMesh.instanceColor.needsUpdate = true;
+}
+
+// ---------- 自动上色：按流 color-by-flow（对齐旧项目 Ctrl+H flowColor） ----------
+let flowColorActive = false;
+const flowColorRatio = new Map(); // nodeId -> 0..1（节点在流向中的纵向位置）
+const FLOW_START = new THREE.Color(0.85, 0.85, 0); // 黄
+const FLOW_END = new THREE.Color(1, 0, 1);         // 洋红
+const _FLOW_WHITE = new THREE.Color(1, 1, 1);
+
+/**
+ * 用 Kahn 拓扑剥层给每个节点算流位置 ratio = fromTop/(fromTop+toBottom)。
+ * fromTop = 从源头沿出边剥到的层号，toBottom = 从汇沿入边反向剥到的层号。
+ * 与旧项目一致：源头发黄、汇发洋红；孤立节点取中间。
+ */
+function computeFlowColors() {
+  flowColorRatio.clear();
+  const ids = state.nodes.map((n) => n.id);
+  const nodeSet = new Set(ids);
+  if (!ids.length) return;
+  const out = new Map(), incnt = new Map();
+  for (const id of ids) { out.set(id, []); incnt.set(id, 0); }
+  for (const e of state.edges) {
+    if (nodeSet.has(e.from) && nodeSet.has(e.to)) { out.get(e.from).push(e.to); incnt.set(e.to, incnt.get(e.to) + 1); }
+  }
+  const layerFrom = peelLayers(ids, incnt, out);
+  // 反向：把边倒过来剥一层，得到"离汇多远"
+  const revOut = new Map(), revInc = new Map();
+  for (const id of ids) { revOut.set(id, []); revInc.set(id, 0); }
+  for (const e of state.edges) {
+    if (nodeSet.has(e.from) && nodeSet.has(e.to)) { revOut.get(e.to).push(e.from); revInc.set(e.from, revInc.get(e.from) + 1); }
+  }
+  const layerTo = peelLayers(ids, revInc, revOut);
+  for (const id of ids) {
+    const fromTop = layerFrom.get(id) ?? 0;
+    const toBottom = layerTo.get(id) ?? 0;
+    const ratio = fromTop + toBottom === 0 ? 0.5 : fromTop / (fromTop + toBottom);
+    flowColorRatio.set(id, THREE.MathUtils.clamp(ratio, 0, 1));
+  }
+}
+
+/** 拓扑剥层：入度为 0 的节点剥出为第 0 层，逐层递增；环内节点无记录（默认 0）。 */
+function peelLayers(ids, inCountRef, outRef) {
+  const incnt = new Map(inCountRef);
+  const depth = new Map();
+  const q = [];
+  for (const id of ids) if (incnt.get(id) === 0) { q.push(id); depth.set(id, 0); }
+  let qi = 0;
+  while (qi < q.length) {
+    const cur = q[qi++];
+    for (const nb of outRef.get(cur)) {
+      const nu = incnt.get(nb) - 1;
+      incnt.set(nb, nu);
+      if (nu === 0) { depth.set(nb, depth.get(cur) + 1); q.push(nb); }
+    }
+  }
+  return depth;
+}
+
+function enableFlowColor() {
+  computeFlowColors();
+  flowColorActive = true;
+  applyHighlights();
+}
+function clearAllColor() {
+  flowColorActive = false;
+  applyHighlights();
+}
+
+/** 顶部菜单栏（IDE 风格）：点标题展开下拉，点项触发，快捷键显示在项右侧。 */
+function initMenubar() {
+  const bar = document.getElementById("menubar");
+  const closeAll = () => bar.querySelectorAll(".menu.open").forEach((m) => m.classList.remove("open"));
+  bar.querySelectorAll(".menu-title").forEach((btn) => {
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const host = document.getElementById(btn.dataset.menu);
+      const was = host.classList.contains("open");
+      closeAll();
+      if (!was) host.classList.add("open");
+    });
+  });
+  document.addEventListener("click", (e) => { if (!bar.contains(e.target)) closeAll(); });
+  document.getElementById("mi-flow-color").addEventListener("click", () => { closeAll(); enableFlowColor(); });
+  document.getElementById("mi-clear-color").addEventListener("click", () => { closeAll(); clearAllColor(); });
 }
 
 /** 标签只显示在选中/悬停节点上 */
@@ -682,13 +774,22 @@ function setupInteraction() {
     if (id) startFlowFrom(id, e.shiftKey);
   });
 
-  // 数字键 5-9（+单击 = 按跳数选邻居）
+  // 数字键 5-9（+单击 = 按跳数选邻居）；Ctrl+H 自动上色 / Ctrl+Alt+8 清除
   window.addEventListener("keydown", (e) => {
     if (isTypingTarget(e)) return;
     if (/^[5-9]$/.test(e.key)) keysHeld.add(e.key);
+    if (e.ctrlKey && !e.altKey && e.key.toLowerCase() === "h") {
+      e.preventDefault();
+      enableFlowColor();
+    } else if (e.ctrlKey && e.altKey && e.key === "8") {
+      e.preventDefault();
+      clearAllColor();
+    }
   });
   window.addEventListener("keyup", (e) => keysHeld.delete(e.key));
   window.addEventListener("blur", () => keysHeld.clear());
+
+  initMenubar();
 }
 
 /** 相机平滑聚焦到节点：正弦缓动平移（2D 移视角中心，3D 平移相机+target，保持距离/朝向）。 */
