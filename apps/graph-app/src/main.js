@@ -376,22 +376,33 @@ function makeLabel(text) {
   const probe = document.createElement("canvas").getContext("2d");
   probe.font = `${fontPx}px system-ui, sans-serif`;
   const textW = Math.ceil(probe.measureText(label).width);
+  const logW = textW + padX * 2, logH = fontPx + padY * 2; // 逻辑尺寸（世界坐标映射用）
+  // 超采样：按 devicePixelRatio 放大画布像素，缩小显示时字形笔画保持锐利、不因缩小模糊而变粗
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
   const canvas = document.createElement("canvas");
-  canvas.width = textW + padX * 2;
-  canvas.height = fontPx + padY * 2; // 字号 + 上下留白
+  canvas.width = Math.max(1, Math.round(logW * dpr));
+  canvas.height = Math.max(1, Math.round(logH * dpr));
   const ctx = canvas.getContext("2d");
+  ctx.scale(dpr, dpr);
   ctx.font = `${fontPx}px system-ui, sans-serif`;
-  ctx.fillStyle = "#e6edf3";
   ctx.textBaseline = "middle";
-  ctx.fillText(label, padX, canvas.height / 2);
+  // 细描边提升与任意底色（含亮色流色/选中）的对比度——旧项目未做，属针对居中叠字的改进
+  ctx.lineJoin = "round";
+  ctx.lineWidth = Math.max(4, Math.round(fontPx * 0.12)); // 较重的深色描边，保证对比度
+  ctx.strokeStyle = "rgba(13,17,23,0.95)";
+  ctx.strokeText(label, padX, logH / 2);
+  ctx.fillStyle = "#e6edf3";
+  ctx.fillText(label, padX, logH / 2);
   const tex = new THREE.CanvasTexture(canvas);
+  tex.minFilter = THREE.LinearMipmapLinearFilter; // 缩小采样更柔和，避免笔画糊成粗块
+  tex.anisotropy = Math.max(4, window.devicePixelRatio >= 2 ? 8 : 4);
   const mat = new THREE.SpriteMaterial({ map: tex, transparent: true, depthTest: false });
   const sprite = new THREE.Sprite(mat);
   sprite.renderOrder = 2; // 标签始终画在最上层（高于节点 renderOrder=1，避免被节点盘盖住）
-  // 使文字在世界坐标里的高度 ≈ 1.5，宽高比随文本长度变化
+  // 使文字在世界坐标里的高度 ≈ 1.5，宽高比随文本长度变化（用逻辑尺寸换算，与画布像素无关）
   const worldH = 1.5;
-  const k = worldH / canvas.height;
-  sprite.scale.set(canvas.width * k, worldH, 1);
+  const k = worldH / logH;
+  sprite.scale.set(logW * k, worldH, 1);
   return sprite;
 }
 
