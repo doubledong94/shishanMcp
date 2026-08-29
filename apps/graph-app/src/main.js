@@ -916,7 +916,7 @@ function setupInteraction() {
   el.addEventListener("contextmenu", (e) => {
     e.preventDefault();
     const id = pickNode(e.clientX, e.clientY);
-    if (id) { flowGestureEdges.clear(); startFlowFrom(id, e.shiftKey); } // 新手势：清空已流集合，本次只做一回动画
+    if (id) openContextMenu(e.clientX, e.clientY, id);
   });
 
   // 数字键 5-9（+单击 = 按跳数选邻居）；Ctrl+H 自动上色 / Ctrl+Shift+H 清除未选中节点颜色
@@ -1030,6 +1030,73 @@ function animateFlowEdge(idx, targetId, cascade, backward) {
       if (cascade) startFlowFrom(targetId, backward); // 级联到下一跳
     },
   });
+}
+
+// ---------- 节点右键浮动菜单 + 查看源码 ----------
+const ctxMenu = document.getElementById("context-menu");
+let ctxMenuNodeId = null;
+function openContextMenu(clientX, clientY, nodeId) {
+  ctxMenuNodeId = nodeId;
+  ctxMenu.hidden = false;
+  // 修正菜单位置，避免超出视口
+  const r = ctxMenu.getBoundingClientRect();
+  ctxMenu.style.left = Math.max(6, Math.min(clientX, window.innerWidth - r.width - 6)) + "px";
+  ctxMenu.style.top = Math.max(6, Math.min(clientY, window.innerHeight - r.height - 6)) + "px";
+}
+function hideContextMenu() {
+  ctxMenu.hidden = true;
+  ctxMenuNodeId = null;
+}
+ctxMenu.addEventListener("click", (e) => {
+  const act = (e.target.closest(".ctx-item") || {}).dataset?.act;
+  const id = ctxMenuNodeId;
+  hideContextMenu();
+  if (!id || !act) return;
+  if (act === "flow" || act === "flow-back") {
+    flowGestureEdges.clear(); // 新手势：本次只做一回动画
+    startFlowFrom(id, act === "flow-back");
+  } else if (act === "source") {
+    viewSourceForNode(id);
+  }
+});
+window.addEventListener("keydown", (e) => { if (e.key === "Escape") hideContextMenu(); });
+document.addEventListener("pointerdown", (e) => { if (ctxMenu && !ctxMenu.contains(e.target)) hideContextMenu(); }, true);
+
+/**
+ * 从图节点定位并展示源码：查 /api/graph/source 拿到 file/line，
+ * 打开左侧代码查看器 → openFile → 滚动并高亮到该行。无源码位置的节点给出提示。
+ */
+async function viewSourceForNode(id) {
+  const project = projectSel.value;
+  if (!project) { errorEl.textContent = "未选项目，无法查看源码"; return; }
+  setCodePanel(true);
+  const qs = new URLSearchParams({ project, id });
+  try {
+    const res = await fetch(`/api/graph/source?${qs}`);
+    if (!res.ok) { const b = await res.text(); throw new Error(`${res.status}: ${b.slice(0, 160)}`); }
+    const data = await res.json();
+    if (!data || !data.file) {
+      errorEl.textContent = `节点「${(data && (data.name || data.label)) || id}」没有可用的源码位置`;
+      return;
+    }
+    // 让代码查看器的项目与图项目一致（不同才切换；切换会重置目录树）
+    if (codeProjectSel.value !== project) {
+      codeProjectSel.value = project;
+      codeProjectSel.dispatchEvent(new Event("change"));
+    }
+    await openFile(data.file);
+    if (data.line != null) locateCodeLine(data.line);
+  } catch (err) {
+    errorEl.textContent = `查看源码失败: ${err instanceof Error ? err.message : err}`;
+  }
+}
+
+/** 在代码查看器里滚动到某行并加高亮。 */
+function locateCodeLine(line) {
+  const target = codeEl.querySelector(`.code-line[data-line="${line}"]`);
+  if (!target) return;
+  target.scrollIntoView({ block: "center", behavior: "smooth" });
+  target.classList.add("found");
 }
 
 // ---------- 场景初始化与主循环 ----------

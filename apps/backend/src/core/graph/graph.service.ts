@@ -343,6 +343,43 @@ export class GraphService {
     };
   }
 
+  /**
+   * 由「图节点 id（node-<Neo4j 内部 identity>）」反查该节点对应源码符号的位置。
+   * 前端节点 id = `node-${identity}`（extractGraphView 生成），借此解析出 Neo4j 内部 id，
+   * 取回该符号的 file/line/col 等源码位置——供「从图节点定位并展示原文件」用。
+   * 查询结果里的 line/col 是 SCIP 0-based，line 对外归一为 1-based。
+   */
+  async nodeSource(project: string, nodeId: string) {
+    this.assertProject(project);
+    const identity = Number(String(nodeId).replace(/^node-/, ""));
+    if (!Number.isInteger(identity)) {
+      throw new Error("非法节点 id");
+    }
+    const cypher = `MATCH (n) WHERE id(n) = $identity RETURN n LIMIT 1`;
+    const records = (await this.neo4j.run(cypher, { identity }, "read")) as Array<{ get: (k: string) => any }>;
+    const rec = records[0];
+    if (!rec) return null;
+    const n = rec.get("n");
+    if (!n || typeof n !== "object") return null;
+    const props = n.properties || {};
+    const labels = n.labels || [];
+    const file = String(props.file ?? props.filePath ?? "");
+    const line = neo4jInteger(props.line) + 1; // 0-based → 1-based（与前端行高亮对齐）
+    return {
+      project,
+      id: `node-${n.identity.toString()}`,
+      label: (labels[0] as string) || undefined,
+      kind: props.kind != null ? String(props.kind) : undefined,
+      name: props.name != null ? String(props.name) : undefined,
+      file: file || undefined,
+      line: props.line != null ? line : undefined,
+      col: neo4jInteger(props.col),
+      colEnd: neo4jInteger(props.colEnd),
+      signature: props.signature != null ? String(props.signature) : undefined,
+      symbol: props.symbol != null ? String(props.symbol) : undefined,
+    };
+  }
+
   /** 取某个已保存的快照（供前端渲染）。 */
   loadView(project: string, viewId: string): (GraphView & { id: string; project: string; cypher: string }) | null {
     const file = viewPath(this.data.getRoot(), project, viewId);

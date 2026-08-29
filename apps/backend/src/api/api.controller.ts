@@ -134,6 +134,14 @@ export class ApiController {
     return { stored: this.dbgLog.length, lines: this.dbgLog };
   }
 
+  /** 由图节点 id 反查其对应源码符号的文件与位置（供「从节点定位并展示原文件」）。 */
+  @Get("graph/source")
+  async getGraphSource(@Query("project") project?: string, @Query("id") id?: string) {
+    if (!project) throw new BadRequestException("需要 project 参数");
+    if (!id) throw new BadRequestException("需要 id 参数（图节点 id，形如 node-<内部identity>）");
+    return this.graph.nodeSource(project, id);
+  }
+
   @Get("graph/symbol")
   async getGraphSymbol(
     @Query("project") project?: string,
