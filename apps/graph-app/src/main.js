@@ -1035,7 +1035,7 @@ function ensureTooltip() {
   tooltipEl.style.cssText =
     "position:fixed;z-index:40;pointer-events:none;background:rgba(13,17,23,.93);color:#c9d1d9;" +
     "border:1px solid #30363d;border-radius:6px;padding:6px 9px;font:12px/1.5 system-ui,sans-serif;" +
-    "white-space:pre;display:none;max-width:320px;overflow:hidden;text-overflow:ellipsis;";
+    "white-space:pre-wrap;display:none;max-width:560px;overflow-wrap:anywhere;word-break:break-all;";
   document.body.appendChild(tooltipEl);
   return tooltipEl;
 }
