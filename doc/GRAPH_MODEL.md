@@ -99,7 +99,7 @@ NEO4J_DATABASE  # 可选
 | `(:Value)-[:FLOWS]->(:Value)` | 数据流（赋值/读写/传参/返回值） | `flow(Mk, S, D)` |
 | `(:Value)-[:CONTROLS]->(:Condition)` | 条件变量守卫哪个分支 | `toConditionValue→conditionItem` |
 | `(:Value)-[:REF]->(:CalledMethod)` | 嵌套方向：实例引用访问成员 | Reference |
-| `(:Value\|:CalledMethod\|:Condition)-[:NEXT]->(...)` | 执行顺序：事件级链，块尾接到块外后续、函数尾跨函数接到调用点（第 5 方向） | `codeOrder(Mk, S, D)` |
+| `(:Value\|:CalledMethod\|:Condition)-[:NEXT]->(...)` | 执行顺序：事件级链，块尾接到块外后续、函数尾跨函数接到调用点（第 5 方向）。**所有运行时 value 事件都入链**（函数体直排 value、实参列表/条件表达式内部读取、实参槽 CALLED_PARAM、嵌套调用 CALLED_RETURN、索引元素 INDEX、返回 RETURN），保证 method↔value、value↔value 顺序连续、节点不孤立；实参槽在调用点按执行序入链（`...→实参求值→实参槽→调用→返回→...`） | `codeOrder(Mk, S, D)` |
 | `(:Condition)-[:NEXT]->(then首事件)` / `(:Condition)-[:ELSE]->(else首事件)` | 分支入口：then 走 NEXT（条件为 true）、else 走 ELSE（条件为 false）；守卫表达式经 `CONTROLS` 查询 | `toConditionValue→conditionItem` + 分支结构 |
 
 ### 3.3 属性
