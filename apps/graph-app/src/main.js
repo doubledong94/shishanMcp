@@ -55,8 +55,10 @@ let activeId = null; // 扩展/聚焦用的主选中（最近被选中/点中的
 let layoutMode = "2d"; // 2d（默认，平移/缩放/绕Z）| 3d（轨道）
 let layoutRunning = true;
 let viewTarget = new THREE.Vector3(0, 0, 0); // 2D 视角中心
-let viewDist = 60; // 2D 相机距离
+let viewHeight = 800; // 2D 正交视图高度（世界单位，越小=放大）
 let viewRotZ = 0; // 2D 绕 Z 旋转
+let perspCamera = null; // 3D 透视相机
+let orthoCamera = null; // 2D 正交相机
 let lastTime = performance.now();
 let densityTick = 0;
 
@@ -229,17 +231,15 @@ const _NODE_TO_CAM = new THREE.Vector3();
 function updateNodePositions() {
   if (!nodeMesh) return;
   const dn = new THREE.Object3D();
+  // 盘面统一朝向"视图方向的反向"（指向相机面），而非各自朝向相机那一个点：
+  // 纠正偏离中心节点被拉成椭圆（相机点方向对离轴节点不再垂直于视图轴）。
+  camera.getWorldDirection(_NODE_TO_CAM);
+  _NODE_TO_CAM.negate().normalize();
   for (let i = 0; i < instNode.length; i++) {
     const p = nodePos.get(instNode[i]);
     if (!p) continue;
     const s = nodeScale.get(instNode[i]) || 1;
-    _NODE_TO_CAM.copy(camera.position).sub(p);
-    if (_NODE_TO_CAM.lengthSq() > 1e-8) {
-      _NODE_TO_CAM.normalize();
-      dn.quaternion.setFromUnitVectors(_NODE_Z, _NODE_TO_CAM); // 盘面法向(+Z)朝向相机
-    } else {
-      dn.quaternion.identity();
-    }
+    dn.quaternion.setFromUnitVectors(_NODE_Z, _NODE_TO_CAM); // 盘面法向(+Z)指向相机面
     dn.position.copy(p);
     dn.scale.set(s, s, 1);
     dn.updateMatrix();
@@ -762,28 +762,49 @@ function applyHighlights() {
 // ---------- 相机 / 控制器（2D 平移缩放 + 3D 轨道） ----------
 function cameraForMode() {
   if (layoutMode === "2d") {
-    camera.position.set(viewTarget.x, viewTarget.y, viewDist);
-    camera.lookAt(viewTarget.x, viewTarget.y, 0);
-    camera.rotateZ(viewRotZ);
+    camera = orthoCamera;
+    const aspect = window.innerWidth / window.innerHeight;
+    const hh = viewHeight / 2;
+    orthoCamera.left = -hh * aspect;
+    orthoCamera.right = hh * aspect;
+    orthoCamera.top = hh;
+    orthoCamera.bottom = -hh;
+    orthoCamera.aspect = aspect;
+    orthoCamera.position.set(viewTarget.x, viewTarget.y, 100);
+    orthoCamera.lookAt(viewTarget.x, viewTarget.y, 0);
+    orthoCamera.rotateZ(viewRotZ); // 2D 绕 Z 旋转（roll）
+    orthoCamera.updateProjectionMatrix();
+  } else {
+    camera = perspCamera;
   }
 }
 
-// ---------- 缩放拖拽条（放大 / 缩小画面，2D/3D 通用，与现实时滚轮双向同步） ----------
-const ZOOM_MIN = 5, ZOOM_MAX = 2000;
+// ---------- 缩放拖拽条（放大 / 缩小画面，2D 正交/3D 透视通用，与滚轮双向同步） ----------
+const ZOOM_H_MIN = 60, ZOOM_H_MAX = 4000;   // 2D 正交视图高度范围
+const ZOOM_D_MIN = 5, ZOOM_D_MAX = 2000;    // 3D 透视相机距离范围
 let zoomDragging = false;
+function zoomFromHeight(h) {
+  const c = Math.max(ZOOM_H_MIN, Math.min(ZOOM_H_MAX, h));
+  return Math.round((100 * Math.log(c / ZOOM_H_MAX)) / Math.log(ZOOM_H_MIN / ZOOM_H_MAX));
+}
+function heightFromZoom(v) {
+  const p = Math.max(0, Math.min(100, v)) / 100;
+  return ZOOM_H_MAX * Math.pow(ZOOM_H_MIN / ZOOM_H_MAX, p);
+}
 function zoomFromDist(d) {
-  const c = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, d));
-  return Math.round((100 * Math.log(c / ZOOM_MAX)) / Math.log(ZOOM_MIN / ZOOM_MAX));
+  const c = Math.max(ZOOM_D_MIN, Math.min(ZOOM_D_MAX, d));
+  return Math.round((100 * Math.log(c / ZOOM_D_MAX)) / Math.log(ZOOM_D_MIN / ZOOM_D_MAX));
 }
 function distFromZoom(v) {
   const p = Math.max(0, Math.min(100, v)) / 100;
-  return ZOOM_MAX * Math.pow(ZOOM_MIN / ZOOM_MAX, p); // 指数映射：滑到右=拉近(缩小 dist)
+  return ZOOM_D_MAX * Math.pow(ZOOM_D_MIN / ZOOM_D_MAX, p);
 }
 function applyZoom() {
-  const d = distFromZoom(+zoomEl.value);
+  const v = +zoomEl.value;
   if (layoutMode === "2d") {
-    viewDist = d;
+    viewHeight = heightFromZoom(v);
   } else {
+    const d = distFromZoom(v);
     const dir = camera.position.clone().sub(controls.target);
     if (dir.lengthSq() < 1e-9) dir.set(0, 0, 1);
     dir.normalize();
@@ -811,8 +832,9 @@ function centerView() {
     if (r > maxR) maxR = r;
   }
   viewTarget.set(cx, cy, cz);
-  viewDist = THREE.MathUtils.clamp(maxR * 3 + 24, 30, 400);
-  if (layoutMode === "3d") {
+  if (layoutMode === "2d") {
+    viewHeight = Math.max(ZOOM_H_MIN, maxR * 2.4 + 40);
+  } else {
     controls.target.copy(viewTarget);
     camera.position.set(cx + maxR * 1.6 + 8, cy + maxR + 8, cz + maxR * 1.6 + 8);
     controls.update();
@@ -982,8 +1004,8 @@ function setupInteraction() {
       if (Math.abs(e.clientX - drag.startX) + Math.abs(e.clientY - drag.startY) > 3) drag.moved = true;
       hideTooltip();
       if (drag.button === 0 || drag.button === 2) {
-        // 平移（按当前 2D 视角尺度换算到世界）
-        const worldPerPx = (2 * viewDist * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2))) / renderer.domElement.clientHeight;
+        // 平移（正交 2D：世界单位/像素 = 视图高度 / 像素高）
+        const worldPerPx = viewHeight / renderer.domElement.clientHeight;
         viewTarget.x -= (dx * Math.cos(viewRotZ) + dy * Math.sin(viewRotZ)) * worldPerPx;
         viewTarget.y -= (-dx * Math.sin(viewRotZ) + dy * Math.cos(viewRotZ)) * worldPerPx;
         if (layoutMode === "2d") viewTarget.z = 0;
@@ -1020,12 +1042,12 @@ function setupInteraction() {
   el.addEventListener("pointerup", endPointer);
   el.addEventListener("pointercancel", endPointer);
 
-  // 缩放（2D）
+  // 缩放（2D 正交）
   el.addEventListener("wheel", (e) => {
     if (layoutMode !== "2d") return;
     e.preventDefault();
-    viewDist *= 1 + e.deltaY * 0.0012;
-    viewDist = THREE.MathUtils.clamp(viewDist, 5, 2000);
+    viewHeight *= 1 + e.deltaY * 0.0012;
+    viewHeight = THREE.MathUtils.clamp(viewHeight, ZOOM_H_MIN, ZOOM_H_MAX);
   }, { passive: false });
 
   // 右键流光级联（shift+右键 = 反向流光，同旧项目）
@@ -1229,15 +1251,18 @@ function initThree() {
   scene = new THREE.Scene();
   scene.background = new THREE.Color(0x0a0a0f); // 对齐旧项目 (0.1,0.1,0.12)（无光照 unlit）
 
-  camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.001, 100000);
-  camera.position.set(0, 0, 60);
+  const aspect0 = window.innerWidth / window.innerHeight;
+  perspCamera = new THREE.PerspectiveCamera(60, aspect0, 0.001, 100000);
+  perspCamera.position.set(0, 0, 60);
+  orthoCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, -1e6, 1e6);
+  camera = layoutMode === "2d" ? orthoCamera : perspCamera;
 
   renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true /** DBG 屏幕像素回读 */ });
   renderer.setSize(window.innerWidth, window.innerHeight);
   renderer.setPixelRatio(window.devicePixelRatio);
   app.appendChild(renderer.domElement);
 
-  controls = new OrbitControls(camera, renderer.domElement);
+  controls = new OrbitControls(perspCamera, renderer.domElement);
   controls.enableDamping = true;
   controls.enabled = false; // 默认 2D
 
@@ -1247,9 +1272,10 @@ function initThree() {
   setupInteraction();
 
   window.addEventListener("resize", () => {
-    camera.aspect = window.innerWidth / window.innerHeight;
-    camera.updateProjectionMatrix();
-    renderer.setSize(window.innerWidth, window.innerHeight);
+    const w = window.innerWidth, h = window.innerHeight;
+    perspCamera.aspect = w / h;
+    perspCamera.updateProjectionMatrix();
+    renderer.setSize(w, h); // ortho 的 left/right/top/bottom 每帧由 cameraForMode 按新窗口尺寸重算
   });
 
   lastTime = performance.now();
@@ -1282,8 +1308,7 @@ function animate(now) {
     if (layoutMode === "3d") controls.update();
     // 缩放条反向同步：滚轮/平移导致实际缩放变化时，让拖拽条跟随（拖拽中不抢焦点）
     if (!zoomDragging) {
-      const d = layoutMode === "2d" ? viewDist : camera.position.distanceTo(controls.target);
-      const zv = zoomFromDist(d);
+      const zv = layoutMode === "2d" ? zoomFromHeight(viewHeight) : zoomFromDist(camera.position.distanceTo(controls.target));
       if (+zoomEl.value !== zv) zoomEl.value = String(zv);
     }
     renderer.render(scene, camera); // 关键：渲染也包进 try，出错打日志不冻结画布
@@ -1743,14 +1768,15 @@ modeBtn.addEventListener("click", () => {
   controls.enabled = layoutMode === "3d";
   modeBtn.textContent = layoutMode === "2d" ? "切到 3D" : "切到 2D";
   if (layoutMode === "3d") {
+    camera = perspCamera;
     controls.target.copy(viewTarget);
-    camera.position.set(viewTarget.x, viewTarget.y, viewDist);
+    perspCamera.position.set(viewTarget.x + 40, viewTarget.y + 20, viewTarget.z + 45);
     controls.update();
     // 三维展开：给节点加 Z 抖动，让布局离开 XY 平面
     for (const v of nodePos.values()) v.z += (Math.random() - 0.5) * 8;
   } else {
+    camera = orthoCamera;
     viewTarget.set(controls.target.x, controls.target.y, 0);
-    viewDist = Math.max(camera.position.distanceTo(controls.target), 5);
     for (const v of nodePos.values()) v.z = 0;
   }
   applyHighlights();
