@@ -298,15 +298,20 @@ function writeFlowStore(key, coloredIds) {
   try { localStorage.setItem(FLOW_STORE_KEY, JSON.stringify({ key, colored: coloredIds })); } catch { /* 忽略 */ }
 }
 function persistViewToggles() {
-  try { localStorage.setItem(VIEW_TOGGLE_KEY, JSON.stringify({ dim: dimEdgeOn })); } catch { /* 忽略 */ }
+  try { localStorage.setItem(VIEW_TOGGLE_KEY, JSON.stringify({ dim: dimEdgeOn, dot: dotLayoutOn })); } catch { /* 忽略 */ }
 }
-/** 读回持久化的维度着色开关（需在 dimEdgeOn 声明之后再调用）。流色按图由 renderGraph 恢复。 */
+/** 读回持久化的维度着色/DOT 布局开关（需在 dimEdgeOn 声明之后再调用）。流色按图由 renderGraph 恢复。 */
 function restoreViewToggles() {
   try {
     const t = JSON.parse(localStorage.getItem(VIEW_TOGGLE_KEY) || "{}");
     dimEdgeOn = !!t.dim;
     const st = document.getElementById("dim-state");
     if (st) st.textContent = dimEdgeOn ? "维度着色：开" : "维度着色：关";
+    if (t.dot === false || t.dot === true) {
+      dotLayoutOn = t.dot;
+      const db = document.getElementById("dot-btn");
+      if (db) db.textContent = dotLayoutOn ? "NEXT:DOT 开" : "NEXT:DOT 关";
+    }
   } catch { persistViewToggles(); }
 }
 /** 按当前图应用/恢复流色；换新图（key 变）则清空。 */
@@ -619,8 +624,90 @@ function nodeAlphaFor(id) {
   return Math.min(base + (hoverId === id ? 0.2 : 0), 1.0);
 }
 
-// ---------- 按维度着色边（五维度 ↔ 边颜色） ----------
-let dimEdgeOn = false;
+// ---------- NEXT 节点 DOT 分层固定布局 ----------
+// dotLayoutOn：为 true 时，被 NEXT 连接的节点用 dot（分层）布局并固定位置，不参与力导；
+// 其余（非 NEXT）节点照常力导，并受固定节点排斥、绕开它们。
+let dotLayoutOn = true;
+let dotNodes = new Set(); // 参与 NEXT 边的节点 id（dot 布局固定）
+const DOT_LAYOUT = { xs: 13, ys: 9, maxRankGap: 60 }; // xs:层间距 / ys:层内间距（世界单位）
+
+/**
+ * 对"被 NEXT 连接"的节点计算 dot（分层）布局：rank = 到某 NEXT 起点的最长路径层（rank 越大 → 执行越后），
+ * x 沿层推进、y 在层内排列，坐标固定下来不再被力导移动。无 NEXT 边时清空。
+ */
+function computeDotLayout() {
+  const fromOf = new Map(), prevOf = new Map(), incident = new Set();
+  for (const e of state.edges) {
+    if (e.label !== "NEXT") continue;
+    if (!nodePos.has(e.from) || !nodePos.has(e.to)) continue;
+    incident.add(e.from); incident.add(e.to);
+    if (!fromOf.has(e.from)) fromOf.set(e.from, []);
+    fromOf.get(e.from).push(e.to);
+    if (!prevOf.has(e.to)) prevOf.set(e.to, []);
+    prevOf.get(e.to).push(e.from);
+  }
+  if (incident.size === 0) { dotNodes = incident; return; }
+  // rank = 最长路径层（允许有环：迭代松弛有限次收敛到有界层，环被压平）
+  const rank = new Map();
+  for (const id of incident) rank.set(id, 0);
+  const ids = [...incident];
+  for (let g = 0; g < ids.length; g++) {
+    let ch = false;
+    for (const id of ids) {
+      for (const p of prevOf.get(id) || []) {
+        if (!incident.has(p)) continue;
+        if (rank.get(p) + 1 > rank.get(id)) { rank.set(id, rank.get(p) + 1); ch = true; }
+      }
+    }
+    if (!ch) break;
+  }
+  // 按 rank 分组，层内顺序 = 上一层的顺序保持（拟 dot 的保序排列，减少交叉）
+  const byRank = new Map();
+  for (const id of ids) {
+    const r = rank.get(id);
+    if (!byRank.has(r)) byRank.set(r, []);
+    byRank.get(r).push(id);
+  }
+  const ranks = [...byRank.keys()].sort((a, b) => a - b);
+  const orderInPrev = new Map(); // id -> 上一层内的序号（用于层内保序）
+  for (const r of ranks) {
+    const list = byRank.get(r);
+    if (r === 0) {
+      list.forEach((id, i) => orderInPrev.set(id, i));
+      continue;
+    }
+    // 排序：按前驱在上一层里的最小序号（crossing reduction），稳定保持
+    list.sort((u, v) => minPredOrder(u) - minPredOrder(v));
+    list.forEach((id, i) => orderInPrev.set(id, i));
+  }
+  function minPredOrder(id) {
+    let m = Infinity;
+    for (const p of prevOf.get(id) || []) {
+      if (orderInPrev.has(p) && orderInPrev.get(p) < m) m = orderInPrev.get(p);
+    }
+    return m === Infinity ? 0 : m;
+  }
+  // 落位：x = rank 层 * xs（居中到 0），y = 层内序号居中
+  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+  for (const r of ranks) {
+    const list = byRank.get(r);
+    const mid = (list.length - 1) / 2;
+    list.forEach((id, i) => {
+      const p = nodePos.get(id);
+      const order = orderInPrev.get(id) ?? i;
+      p.x = r * DOT_LAYOUT.xs;
+      p.y = (order - mid) * DOT_LAYOUT.ys;
+      p.z = 0;
+      if (p.x < minX) minX = p.x; if (p.x > maxX) maxX = p.x;
+      if (p.y < minY) minY = p.y; if (p.y > maxY) maxY = p.y;
+    });
+  }
+  const cx = (minX + maxX) / 2, cy = (minY + maxY) / 2;
+  for (const id of ids) { const p = nodePos.get(id); p.x -= cx; p.y -= cy; }
+  dotNodes = incident;
+}
+/** 探测是否被 NEXT 连接的节点（供布局/拖拽判断）。 */
+
 const EDGE_DIM_OF = {
   // 时机
   CALLS: "timing",
@@ -682,26 +769,35 @@ function stepLayout(dt) {
   // 力导中鼠标拖拽的节点：先快照其位置，布局计算后还原（该节点不被力导移走，其余照常动画）
   const dv0 = dragNodeId != null ? nodePos.get(dragNodeId) : null;
   _dragPin = dv0 ? dv0.clone() : null;
-  // 斥力（所有节点对）
+  // 斥力（所有节点对；两固定 DOT 点彼此无作用、且固定点不被移动，只把周围的力导节点推开）
   for (let i = 0; i < n; i++) {
     const a = nodePos.get(nodes[i].id);
+    const af = dotNodes.has(nodes[i].id);
     for (let j = i + 1; j < n; j++) {
       const b = nodePos.get(nodes[j].id);
+      const bf = dotNodes.has(nodes[j].id);
+      if (af && bf) continue;
       const dx = b.x - a.x, dy = b.y - a.y, dz = b.z - a.z;
       let dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
-      if (dist < 1e-6) { a.x += (Math.random() - 0.5) * 0.01; dist = 1e-6; }
+      if (dist < 1e-6) {
+        if (!af) a.x += (Math.random() - 0.5) * 0.01;
+        if (!bf) b.x += (Math.random() - 0.5) * 0.01;
+        dist = 1e-6;
+      }
       const d = Math.max(dist, LAYOUT.minDist);
       const f = (k * LAYOUT.repulsion) / (d * d);
       const fx = (f * dx) / d, fy = (f * dy) / d, fz = (f * dz) / d;
-      a.x -= fx; a.y -= fy; a.z -= fz;
-      b.x += fx; b.y += fy; b.z += fz;
+      if (!af) { a.x -= fx; a.y -= fy; a.z -= fz; }
+      if (!bf) { b.x += fx; b.y += fy; b.z += fz; }
     }
   }
-  // 弹簧（边）
+  // 弹簧（边；固定 DOT 节点不被拖走，只移动非固定端）
   for (const e of state.edges) {
     const a = nodePos.get(e.from);
     const b = nodePos.get(e.to);
     if (!a || !b) continue;
+    const af = dotNodes.has(e.from), bf = dotNodes.has(e.to);
+    if (af && bf) continue;
     const dx = b.x - a.x, dy = b.y - a.y, dz = b.z - a.z;
     const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
     if (dist < 1e-6) continue;
@@ -709,14 +805,17 @@ function stepLayout(dt) {
     const fx = ((dist - target) / dist) * dx * k * LAYOUT.spring;
     const fy = ((dist - target) / dist) * dy * k * LAYOUT.spring;
     const fz = ((dist - target) / dist) * dz * k * LAYOUT.spring;
-    a.x += fx; a.y += fy; a.z += fz;
-    b.x -= fx; b.y -= fy; b.z -= fz;
+    if (!af) { a.x += fx; a.y += fy; a.z += fz; }
+    if (!bf) { b.x -= fx; b.y -= fy; b.z -= fz; }
   }
-  // 居中（拉向当前质心，防止整体漂移）
-  let cx = 0, cy = 0, cz = 0;
-  for (const v of nodePos.values()) { cx += v.x; cy += v.y; cz += v.z; }
-  cx /= n; cy /= n; cz /= n;
-  for (const v of nodePos.values()) {
+  // 居中（拉向当前质心防漂移；固定 DOT 节点保持 dot 布局位置，不参与居中）
+  let cx = 0, cy = 0, cz = 0, cnt = 0;
+  for (const v of nodePos.values()) { cx += v.x; cy += v.y; cz += v.z; cnt++; }
+  cx /= cnt; cy /= cnt; cz /= cnt;
+  for (const nd of nodes) {
+    if (dotNodes.has(nd.id)) continue;
+    const v = nodePos.get(nd.id);
+    if (!v) continue;
     v.x -= cx * k * LAYOUT.center;
     v.y -= cy * k * LAYOUT.center;
     v.z -= cz * k * LAYOUT.center;
@@ -1359,6 +1458,7 @@ function clearGraph() {
   nodeLabels.clear();
   nodesById.clear();
   nodePos.clear();
+  dotNodes = new Set();
   edgeMesh = null;
   edgeGeo = null;
   edgeData = [];
@@ -1392,6 +1492,7 @@ function renderGraph(data, seedId) {
   rebuildNodes(); // 重建 InstancedMesh（节点数变化时）
 
   rebuildEdges();
+  if (dotLayoutOn) computeDotLayout(); // NEXT 节点用 dot 分层布局并固定
   if (isFresh) centerView(); // 仅在全新加载时居中；增量并入（探索/定位）不跳相机
   statsEl.textContent = `${state.nodes.length} 节点 · ${state.edges.length} 边`;
   errorEl.textContent = "";
@@ -1815,6 +1916,25 @@ layoutBtn.addEventListener("click", () => {
   layoutRunning = !layoutRunning;
   layoutBtn.textContent = layoutRunning ? "暂停布局" : "继续布局";
 });
+
+// NEXT:DOT 开关：NEXT 连接节点用 dot 分层布局并固定，其余节点力导
+const dotBtn = document.getElementById("dot-btn");
+function toggleDotLayout() {
+  dotLayoutOn = !dotLayoutOn;
+  if (dotLayoutOn) {
+    computeDotLayout();
+  } else {
+    dotNodes = new Set();
+    // 解除固定的 dot 节点：给个随机扰动，让力导能重新摊开
+    for (const nd of state.nodes) {
+      const v = nodePos.get(nd.id);
+      if (v) { v.x += (Math.random() - 0.5) * 6; v.y += (Math.random() - 0.5) * 6; }
+    }
+  }
+  dotBtn.textContent = dotLayoutOn ? "NEXT:DOT 开" : "NEXT:DOT 关";
+  persistViewToggles();
+}
+dotBtn.addEventListener("click", () => { closeAll(); toggleDotLayout(); });
 
 // ===================== 代码查看器（右侧可折叠侧边栏） =====================
 const codeToggleEl = document.getElementById("code-toggle");
