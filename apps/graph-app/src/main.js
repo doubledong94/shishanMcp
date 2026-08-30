@@ -1588,15 +1588,18 @@ async function pollCurrent() {
     const edges = (cur.edges || []).length;
     const sig = `${cur.revision || 0}:${nodes}:${edges}`;
     if (sig === lastGraphSig) return; // 无变化，跳过
-    lastGraphSig = sig;
     if (cur.empty || nodes === 0) {
       if (state.nodes.length > 0) {
         clearGraph();
         statsEl.textContent = "0 节点 · 0 边（工作图已清空，等待新的 query_graph）";
       }
+      lastGraphSig = sig;
       return;
     }
     renderGraph(cur); // 增量并入：按 id 去重、保留已有节点位置（沉降动画）
+    // 关键：只有成功渲染后才提交 sig。若渲染抛异常被 catch 吞掉，sig 不提交，下轮会重试，
+    // 避免卡在旧图、必须手动刷新。
+    lastGraphSig = sig;
   } catch { /* 瞬时错误跳过，下次轮询再试 */ }
 }
 setInterval(pollCurrent, 2000);
