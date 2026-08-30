@@ -629,7 +629,7 @@ function nodeAlphaFor(id) {
 // 其余（非 NEXT）节点照常力导，并受固定节点排斥、绕开它们。
 let dotLayoutOn = true;
 let dotNodes = new Set(); // 参与 NEXT 边的节点 id（dot 布局固定）
-const DOT_LAYOUT = { xs: 13, ys: 9, maxRankGap: 60 }; // xs:层间距 / ys:层内间距（世界单位）
+const DOT_LAYOUT = { xs: 15, ys: 18, maxRankGap: 60 }; // xs:层间距 / ys:层内间距（世界单位）
 
 /**
  * 对"被 NEXT 连接"的节点计算 dot（分层）布局：rank = 到某 NEXT 起点的最长路径层（rank 越大 → 执行越后），
