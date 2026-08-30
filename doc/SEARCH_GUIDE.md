@@ -5,6 +5,7 @@
 > 覆盖其中出现的**每一种搜索类型**，并逐一给出新项目（Neo4j + cypher）的对应实现。
 >
 > 图模型见 `doc/GRAPH_MODEL.md`；部署方式见 `README.md`。
+> 想直接用现成、可粘贴的 cypher（含实际踩坑的注意事项），见 `doc/SEARCH_QUERIES.md`（实践速查）。
 
 ---
 
