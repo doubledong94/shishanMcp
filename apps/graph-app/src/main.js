@@ -631,50 +631,92 @@ let dotLayoutOn = true;
 let dotNodes = new Set();   // 参与 NEXT 边的节点 id
 let dotRank = new Map();    // id -> NEXT 执行层 rank（rank 越大 → 执行越后）
 // Ranked 定向力导（DAG/flow）：xs=执行层横向间距(列拉力目标)，rankStrength=列拉力强度，ys=层内初始散开间距
-const DOT_LAYOUT = { xs: 34, rankStrength: 0.10, ys: 16 };
+// xs：相邻执行步间距；ys：分支相对主链的纵向错开；两者世界单位
+const DOT_LAYOUT = { xs: 12, ys: 22, rankStrength: 0.10 };
 
 /**
- * 计算 NEXT 子图的执行层 rank（= 到某 NEXT 起点的最长路径层，允许有环：迭代松弛有界收敛），
- * 并给节点一个指向所在层的软锚定初始位置。真正的位置由力导 + 列拉力（见 stepLayout）松弛得出，
- * 分支在列间自然收拢、不占整列、不固定死。
+ * 横向单线执行链：把被 NEXT 连接的节点按执行顺序排成一条从左到右的线并固定位置。
+ * 步骤：
+ *  1) rank = 到某 NEXT 起点的最长路径执行层（允许有环：迭代松弛有界收敛）；
+ *  2) 对 NEXT 边做拓扑序（Kahn，同层按 rank 降序继续，让主链单调推进）得到顺序 sequence；
+ *  3) 主链（rank 严格递增的那条最长路径）落在 y=0，分支节点按 rank 号上下扇开，
+ *     形成"一条主直线 + 分支小幅上下错开"的清爽横向流。
  */
 function computeDotLayout() {
-  const prevOf = new Map(), incident = new Set();
+  const prevOf = new Map(), nextOf = new Map(), incident = new Set();
   for (const e of state.edges) {
     if (e.label !== "NEXT") continue;
     if (!nodePos.has(e.from) || !nodePos.has(e.to)) continue;
     incident.add(e.from); incident.add(e.to);
+    if (!nextOf.has(e.from)) nextOf.set(e.from, []);
+    nextOf.get(e.from).push(e.to);
     if (!prevOf.has(e.to)) prevOf.set(e.to, []);
     prevOf.get(e.to).push(e.from);
   }
   if (incident.size === 0) { dotNodes = incident; dotRank.clear(); return; }
-  const rank = new Map();
-  for (const id of incident) rank.set(id, 0);
   const ids = [...incident];
+  // 1) rank = 最长路径执行层
+  const rank = new Map(); for (const id of ids) rank.set(id, 0);
   for (let g = 0; g < ids.length; g++) {
     let ch = false;
-    for (const id of ids) {
-      for (const p of prevOf.get(id) || []) {
-        if (!incident.has(p)) continue;
-        if (rank.get(p) + 1 > rank.get(id)) { rank.set(id, rank.get(p) + 1); ch = true; }
-      }
+    for (const id of ids) for (const p of prevOf.get(id) || []) {
+      if (incident.has(p) && rank.get(p) + 1 > rank.get(id)) { rank.set(id, rank.get(p) + 1); ch = true; }
     }
     if (!ch) break;
   }
-  dotNodes = incident;
-  dotRank = rank;
-  // 初始位置：x 放到目标执行层列、y 在列内散开（软锚定起点，力导会在此基础上松弛）
-  const byRank = new Map();
-  for (const [id, r] of rank) { if (!byRank.has(r)) byRank.set(r, []); byRank.get(r).push(id); }
-  for (const [r, list] of byRank) {
-    const mid = (list.length - 1) / 2;
-    list.forEach((id, i) => {
-      const p = nodePos.get(id);
-      p.x = r * DOT_LAYOUT.xs;
-      p.y = (i - mid) * DOT_LAYOUT.ys + (Math.random() - 0.5) * 2;
-      p.z = 0;
-    });
+  // 2) 拓扑序（Kahn，待处理按 rank 降序：优先继续推进主链）
+  const indeg = new Map(); for (const id of ids) indeg.set(id, 0);
+  for (const [f, arr] of nextOf) for (const t of arr) if (incident.has(t)) indeg.set(t, (indeg.get(t) || 0) + 1);
+  const ready = ids.filter((id) => (indeg.get(id) || 0) === 0).sort((a, b) => rank.get(b) - rank.get(a));
+  const taken = new Set(), seq = [];
+  const popNext = () => { ready.sort((a, b) => rank.get(b) - rank.get(a)); return ready.pop(); };
+  let cur;
+  while ((cur = popNext()) !== undefined) {
+    if (taken.has(cur)) continue;
+    taken.add(cur); seq.push(cur);
+    for (const t of nextOf.get(cur) || []) {
+      if (!incident.has(t) || taken.has(t)) continue;
+      const d = (indeg.get(t) || 0) - 1; indeg.set(t, d);
+      if (d === 0) ready.push(t);
+    }
   }
+  for (const id of ids) if (!taken.has(id)) seq.push(id); // 环剩余节点兜底
+  // 3) 主链：从某个 rank 0 起点沿"rank 恰好 +1"的后继走到尽头，作为 y=0 的主直线
+  const trunk = new Set();
+  {
+    let s = ids.find((id) => rank.get(id) === 0 && (prevOf.get(id) || []).every((p) => !incident.has(p)));
+    if (s === undefined) s = ids.find((id) => rank.get(id) === 0) ?? null;
+    while (s != null) {
+      trunk.add(s);
+      let next = null;
+      for (const t of nextOf.get(s) || []) {
+        if (!incident.has(t) || trunk.has(t)) continue;
+        if (rank.get(t) === rank.get(s) + 1) { next = t; break; } // 主链走 rank 严格 +1 的第一个后继
+      }
+      s = next;
+    }
+  }
+  // 4) 落位：x = 拓扑序位置（一条从左到右的线）；主链 y=0，分支按 rank 上下扇开错开
+  const seqPos = new Map(); ids.forEach((id, i) => seqPos.set(id, i));
+  const fanCount = new Map(); // rank -> 已扇开的非主链节点数
+  for (const id of ids) {
+    const p = nodePos.get(id);
+    p.x = seqPos.get(id) * DOT_LAYOUT.xs;
+    if (trunk.has(id)) { p.y = 0; }
+    else {
+      const r = rank.get(id);
+      const k = fanCount.get(r) || 0;
+      fanCount.set(r, k + 1);
+      p.y = (k % 2 === 0 ? 1 : -1) * (Math.floor(k / 2) + 1) * DOT_LAYOUT.ys;
+    }
+    p.z = 0;
+  }
+  // 整体居中：x、y 各自去掉均值，让主链大致围绕原点
+  let cx = 0, cy = 0;
+  for (const id of ids) { cx += nodePos.get(id).x; cy += nodePos.get(id).y; }
+  cx /= ids.length; cy /= ids.length;
+  for (const id of ids) { const p = nodePos.get(id); p.x -= cx; p.y -= cy; }
+  dotNodes = incident; dotRank = rank;
 }
 
 // ---------- 按维度着色边（五维度 ↔ 边颜色） ----------
@@ -740,26 +782,31 @@ function stepLayout(dt) {
   // 力导中鼠标拖拽的节点：先快照其位置，布局计算后还原（该节点不被力导移走，其余照常动画）
   const dv0 = dragNodeId != null ? nodePos.get(dragNodeId) : null;
   _dragPin = dv0 ? dv0.clone() : null;
-  // 斥力（所有节点对）
+  // 斥力（所有节点对；两固定单线节点彼此无作用，且固定点不被移动，只把周围力导节点推开）
   for (let i = 0; i < n; i++) {
     const a = nodePos.get(nodes[i].id);
+    const af = dotNodes.has(nodes[i].id);
     for (let j = i + 1; j < n; j++) {
       const b = nodePos.get(nodes[j].id);
+      const bf = dotNodes.has(nodes[j].id);
+      if (af && bf) continue;
       const dx = b.x - a.x, dy = b.y - a.y, dz = b.z - a.z;
       let dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
-      if (dist < 1e-6) { a.x += (Math.random() - 0.5) * 0.01; dist = 1e-6; }
+      if (dist < 1e-6) { if (!af) a.x += (Math.random() - 0.5) * 0.01; if (!bf) b.x += (Math.random() - 0.5) * 0.01; dist = 1e-6; }
       const d = Math.max(dist, LAYOUT.minDist);
       const f = (k * LAYOUT.repulsion) / (d * d);
       const fx = (f * dx) / d, fy = (f * dy) / d, fz = (f * dz) / d;
-      a.x -= fx; a.y -= fy; a.z -= fz;
-      b.x += fx; b.y += fy; b.z += fz;
+      if (!af) { a.x -= fx; a.y -= fy; a.z -= fz; }
+      if (!bf) { b.x += fx; b.y += fy; b.z += fz; }
     }
   }
-  // 弹簧（边）
+  // 弹簧（边；固定单线节点不被拖走，只移动非固定端）
   for (const e of state.edges) {
     const a = nodePos.get(e.from);
     const b = nodePos.get(e.to);
     if (!a || !b) continue;
+    const af = dotNodes.has(e.from), bf = dotNodes.has(e.to);
+    if (af && bf) continue;
     const dx = b.x - a.x, dy = b.y - a.y, dz = b.z - a.z;
     const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
     if (dist < 1e-6) continue;
@@ -767,20 +814,10 @@ function stepLayout(dt) {
     const fx = ((dist - target) / dist) * dx * k * LAYOUT.spring;
     const fy = ((dist - target) / dist) * dy * k * LAYOUT.spring;
     const fz = ((dist - target) / dist) * dz * k * LAYOUT.spring;
-    a.x += fx; a.y += fy; a.z += fz;
-    b.x -= fx; b.y -= fy; b.z -= fz;
+    if (!af) { a.x += fx; a.y += fy; a.z += fz; }
+    if (!bf) { b.x -= fx; b.y -= fy; b.z -= fz; }
   }
-  // Ranked 定向力导：把 NEXT 节点的 x 软锚定到所在执行层的列位置，保持执行顺序方向；
-  // 分支可在 y 上自由收拢（列拉力只作用于 x，不规定 y/固定死）。
-  if (dotLayoutOn && dotRank.size) {
-    const kk = Math.min(dt / 16.666, 2) * LAYOUT.temperature;
-    for (const [id, r] of dotRank) {
-      const v = nodePos.get(id);
-      if (!v) continue;
-      v.x += (r * DOT_LAYOUT.xs - v.x) * kk * DOT_LAYOUT.rankStrength;
-    }
-  }
-  // 居中（拉向当前质心，防止整体漂移；NEXT 节点被列拉力锚定在绝对执行层坐标，不参与居中，保持链稳定）
+  // 居中（拉向当前质心防漂移；固定单线节点保持单线布局位置，不参与居中）
   let cx = 0, cy = 0, cz = 0, cnt = 0;
   for (const v of nodePos.values()) { cx += v.x; cy += v.y; cz += v.z; cnt++; }
   cx /= cnt; cy /= cnt; cz /= cnt;
