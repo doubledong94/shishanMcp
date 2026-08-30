@@ -262,6 +262,21 @@ async function dispatch(project, language, jobId) {
       if (fs.existsSync(gp)) content = fs.readFileSync(gp, "utf8") + "\n";
       content += "org.gradle.java.installations.paths=/opt/jdk21,/opt/jdk11\norg.gradle.java.installations.auto-download=false\n";
       fs.writeFileSync(gp, content);
+      // 也写进 Gradle 用户主目录的 gradle.properties：Gradle 构建的项目根是 work/<project>
+      // 而不是 work/，父级 work/gradle.properties 不会被读到；用户主目录则任何构建都会读。
+      // 否则 okhttp 的 compileJavaModuleInfo(硬编码 JDK11) 找不到 toolchain 而 BUILD FAILED。
+      const gradleHome =
+        process.env.GRADLE_USER_HOME ||
+        (process.env.HOME ? path.join(process.env.HOME, ".gradle") : "/root/.gradle");
+      fs.mkdirSync(gradleHome, { recursive: true });
+      const ghp = path.join(gradleHome, "gradle.properties");
+      let ghContent = "";
+      if (fs.existsSync(ghp)) ghContent = fs.readFileSync(ghp, "utf8");
+      if (!/org\.gradle\.java\.installations\.paths/.test(ghContent)) {
+        ghContent +=
+          "\norg.gradle.java.installations.paths=/opt/jdk21,/opt/jdk11\norg.gradle.java.installations.auto-download=false\n";
+        fs.writeFileSync(ghp, ghContent);
+      }
     }
     // scip-clang 需要编译数据库（compile_commands.json）才能索引 C/C++，提前给出可读报错
     if (isClang(language) && !fs.existsSync(path.join(workDir, "compile_commands.json"))) {
