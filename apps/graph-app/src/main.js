@@ -632,7 +632,7 @@ let dotNodes = new Set();   // 参与 NEXT 边的节点 id
 let dotRank = new Map();    // id -> NEXT 执行层 rank（rank 越大 → 执行越后）
 // Ranked 定向力导（DAG/flow）：xs=执行层横向间距(列拉力目标)，rankStrength=列拉力强度，ys=层内初始散开间距
 // 主链（事件）间距 / Value 数据坑的首行下移量 / 数据坑内上下叠的节距（世界单位）
-const DOT_LAYOUT = { x: 30, gutter: 22, vpitch: 24, rankStrength: 0.10 };
+const DOT_LAYOUT = { x: 30, gutter: 22, vpitch: 24, leadGap: 16, rankStrength: 0.10 };
 
 function nodeKind(id) { const n = nodesById.get(id); return n ? (n.kind || n.label || "") : ""; }
 
@@ -687,22 +687,47 @@ function computeDotLayout() {
   const spineX = new Map(); spine.forEach((id, i) => spineX.set(id, i * DOT_LAYOUT.x));
   const seqIdx = new Map(); seq.forEach((id, i) => seqIdx.set(id, i));
   const gutterSlots = new Map(); // 数据坑锚点(最近的相邻事件对) -> 已用槽位
+  const leadCounts = new Map(), trailCounts = new Map(); // 首/尾无锚校准值的水平展开计数
+  const leadUsed = new Map(), trailUsed = new Map();
+  // 第一遍：统计每个前导/后随值属于哪个事件，确定水平展开槽位数
+  for (const id of seq) {
+    if (spineX.has(id)) continue;
+    const idx = seqIdx.get(id);
+    let px = null, nx = null;
+    for (let i = idx - 1; i >= 0; i--) if (spineX.has(seq[i])) { px = spineX.get(seq[i]); break; }
+    for (let i = idx + 1; i < seq.length; i++) if (spineX.has(seq[i])) { nx = spineX.get(seq[i]); break; }
+    if (px == null && nx != null) leadCounts.set(nx, (leadCounts.get(nx) || 0) + 1);
+    else if (px != null && nx == null) trailCounts.set(px, (trailCounts.get(px) || 0) + 1);
+  }
   for (const id of seq) {
     const p = nodePos.get(id);
     if (spineX.has(id)) { p.x = spineX.get(id); p.y = 0; }
     else {
       // Value：横向锚定到执行序列里"最近的前一个/后一个主链事件"的横坐标中点，避免邻接也是
-      // Value（value→value 连续段）时取不到锚点而全都落到 x=0（第一列堆叠）。
+      // Value（value→value 连续段）时取不到锚点而全都落到 x=0。
       const idx = seqIdx.get(id);
       let px = null, nx = null;
       for (let i = idx - 1; i >= 0; i--) if (spineX.has(seq[i])) { px = spineX.get(seq[i]); break; }
       for (let i = idx + 1; i < seq.length; i++) if (spineX.has(seq[i])) { nx = spineX.get(seq[i]); break; }
-      const ax = px != null && nx != null ? (px + nx) / 2 : (px ?? nx ?? 0);
-      p.x = ax;
-      const key = `${px ?? ""}->${nx ?? ""}`;
-      const g = gutterSlots.get(key) || 0;
-      gutterSlots.set(key, g + 1);
-      p.y = -(DOT_LAYOUT.gutter + g * DOT_LAYOUT.vpitch);
+      if (px != null && nx != null) {
+        // 两事件之间：放中点下方，多个值上下叠
+        p.x = (px + nx) / 2;
+        const g = gutterSlots.get(`${px}->${nx}`) || 0;
+        gutterSlots.set(`${px}->${nx}`, g + 1);
+        p.y = -(DOT_LAYOUT.gutter + g * DOT_LAYOUT.vpitch);
+      } else if (nx != null) {
+        // 前导值（首个事件之前）：水平展开成一行迎向该事件，避免全部叠在其列上（竖堆→显得和前几列重叠）
+        p.x = nx - (leadCounts.get(nx) - ((leadUsed.get(nx) || 0))) * DOT_LAYOUT.leadGap;
+        leadUsed.set(nx, (leadUsed.get(nx) || 0) + 1);
+        p.y = -DOT_LAYOUT.gutter;
+      } else if (px != null) {
+        // 后随值（末尾事件之后）：同样水平展开在事件右侧
+        p.x = px + (((trailUsed.get(px) || 0) + 1)) * DOT_LAYOUT.leadGap;
+        trailUsed.set(px, (trailUsed.get(px) || 0) + 1);
+        p.y = -DOT_LAYOUT.gutter;
+      } else {
+        p.x = 0; p.y = -DOT_LAYOUT.gutter;
+      }
     }
     p.z = 0;
   }
