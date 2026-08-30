@@ -962,7 +962,7 @@ let intensityMul = 1;
 const intensityEl = document.getElementById("intensity");
 function applyIntensity() {
   const v = (+intensityEl.value || 50) / 100;
-  intensityMul = 0.2 * Math.pow(25, v); // v=0→0.2x, v=0.5→1x, v=1→5x；越高越剧烈
+  intensityMul = 0.05 * Math.pow(400, v); // v=0→0.05x, v=0.5→1x, v=1→20x；默认 50=1x
 }
 intensityEl.addEventListener("input", applyIntensity);
 applyIntensity();
