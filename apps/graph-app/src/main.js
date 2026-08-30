@@ -801,7 +801,7 @@ function stepLayout(dt) {
   const nodes = state.nodes;
   const n = nodes.length;
   if (!n) return;
-  const k = Math.min(dt / 16.666, 2) * LAYOUT.temperature;
+  const k = Math.min(dt / 16.666, 2) * LAYOUT.temperature * intensityMul;
   // 力导中鼠标拖拽的节点：先快照其位置，布局计算后还原（该节点不被力导移走，其余照常动画）
   const dv0 = dragNodeId != null ? nodePos.get(dragNodeId) : null;
   _dragPin = dv0 ? dv0.clone() : null;
@@ -955,6 +955,17 @@ zoomEl.addEventListener("pointerdown", () => { zoomDragging = true; });
 zoomEl.addEventListener("input", applyZoom);
 zoomEl.addEventListener("pointerup", () => { zoomDragging = false; });
 zoomEl.addEventListener("pointercancel", () => { zoomDragging = false; });
+
+// ---------- 力导剧烈程度（布局温度）拖拽条 ----------
+// 映射 0-100 -> 力导温度乘子，默认 50 = ×1.0（对应原 LAYOUT.temperature）
+let intensityMul = 1;
+const intensityEl = document.getElementById("intensity");
+function applyIntensity() {
+  const v = (+intensityEl.value || 50) / 100;
+  intensityMul = 0.2 * Math.pow(25, v); // v=0→0.2x, v=0.5→1x, v=1→5x；越高越剧烈
+}
+intensityEl.addEventListener("input", applyIntensity);
+applyIntensity();
 
 function centerView() {
   const nodes = state.nodes;
