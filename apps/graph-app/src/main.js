@@ -706,8 +706,9 @@ function computeDotLayout() {
   for (const id of ids) { const p = nodePos.get(id); p.x -= cx; p.y -= cy; }
   dotNodes = incident;
 }
-/** 探测是否被 NEXT 连接的节点（供布局/拖拽判断）。 */
 
+// ---------- 按维度着色边（五维度 ↔ 边颜色） ----------
+let dimEdgeOn = false;
 const EDGE_DIM_OF = {
   // 时机
   CALLS: "timing",
