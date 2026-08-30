@@ -1408,8 +1408,42 @@ ctxMenu.addEventListener("click", (e) => {
     startFlowFrom(id, act === "flow-back");
   } else if (act === "source") {
     viewSourceForNode(id);
+  } else if (act === "copy-hover") {
+    // 复制 hover tooltip 内容（剥离 HTML 标签为纯文本）
+    const html = nodeInfoHtml(id);
+    const text = html ? html.replace(/<[^>]+>/g, "") : "";
+    if (text) {
+      navigator.clipboard?.writeText(text).then(
+        () => toast(`已复制：${id}`),
+        () => fallbackCopy(text),
+      );
+    }
   }
 });
+function toast(msg) {
+  let t = document.getElementById("graph-toast");
+  if (!t) {
+    t = document.createElement("div");
+    t.id = "graph-toast";
+    t.style.cssText = "position:fixed;left:50%;bottom:28px;transform:translateX(-50%);z-index:99;" +
+      "background:rgba(22,27,34,.95);color:#e6edf3;border:1px solid #30363d;border-radius:6px;" +
+      "padding:7px 12px;font:12px/1.4 system-ui,sans-serif;opacity:0;transition:opacity .2s;pointer-events:none;";
+    document.body.appendChild(t);
+  }
+  t.textContent = msg;
+  t.style.opacity = "1";
+  clearTimeout(t._timer);
+  t._timer = setTimeout(() => (t.style.opacity = "0"), 1600);
+}
+function fallbackCopy(text) {
+  const ta = document.createElement("textarea");
+  ta.value = text;
+  ta.style.cssText = "position:fixed;left:-9999px";
+  document.body.appendChild(ta);
+  ta.select();
+  try { document.execCommand("copy"); toast("已复制（兼容模式）"); } catch { toast("复制失败"); }
+  document.body.removeChild(ta);
+}
 window.addEventListener("keydown", (e) => { if (e.key === "Escape") hideContextMenu(); });
 document.addEventListener("pointerdown", (e) => { if (ctxMenu && !ctxMenu.contains(e.target)) hideContextMenu(); }, true);
 
