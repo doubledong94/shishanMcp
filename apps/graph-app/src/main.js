@@ -277,10 +277,51 @@ function updateNodeColors() {
 }
 
 // ---------- 自动上色：按流 color-by-flow（对齐旧项目 Ctrl+H flowColor / Ctrl+Alt+H 清除未选中） ----------
+// 流色按"图"记忆（以节点集合的哈希为 key）：同图刷新/重渲染自动恢复，换新图则清空 → 既不丢色也不残留旧色
 const flowColored = new Set(); // 当前带流色的节点集合（对齐旧 nodesObj->colorSpecified）
 const flowColorRatio = new Map(); // nodeId -> 0..1（节点在流向中的纵向位置）
 const FLOW_START = new THREE.Color(0.85, 0.85, 0); // 黄
 const FLOW_END = new THREE.Color(1, 0, 1);         // 洋红
+const FLOW_STORE_KEY = "shishan-flow-color";
+const VIEW_TOGGLE_KEY = "shishan-graph-toggles";
+/** 节点集合的稳定小哈希（与顺序无关），作为"哪张图"的标识。 */
+function graphKey(nodes) {
+  let h = 7;
+  const ids = nodes.map((n) => n.id).sort();
+  for (const s of ids) for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
+  return h.toString(36);
+}
+function readFlowStore() {
+  try { return JSON.parse(localStorage.getItem(FLOW_STORE_KEY) || "null") || {}; } catch { return {}; }
+}
+function writeFlowStore(key, coloredIds) {
+  try { localStorage.setItem(FLOW_STORE_KEY, JSON.stringify({ key, colored: coloredIds })); } catch { /* 忽略 */ }
+}
+function persistViewToggles() {
+  try { localStorage.setItem(VIEW_TOGGLE_KEY, JSON.stringify({ dim: dimEdgeOn })); } catch { /* 忽略 */ }
+}
+/** 读回持久化的维度着色开关（需在 dimEdgeOn 声明之后再调用）。流色按图由 renderGraph 恢复。 */
+function restoreViewToggles() {
+  try {
+    const t = JSON.parse(localStorage.getItem(VIEW_TOGGLE_KEY) || "{}");
+    dimEdgeOn = !!t.dim;
+    const st = document.getElementById("dim-state");
+    if (st) st.textContent = dimEdgeOn ? "维度着色：开" : "维度着色：关";
+  } catch { persistViewToggles(); }
+}
+/** 按当前图应用/恢复流色；换新图（key 变）则清空。 */
+function applyFlowForGraph() {
+  const key = graphKey(state.nodes);
+  const stored = readFlowStore();
+  const ratioKey = stored.key === key;
+  flowColored.clear();
+  if (ratioKey && Array.isArray(stored.colored)) {
+    for (const id of stored.colored) flowColored.add(id);
+    computeFlowColors();
+  }
+  // key 不同（换新图）→ 不清存也不上色；key 相同才恢复
+}
+
 const _FLOW_WHITE = new THREE.Color(1, 1, 1);
 
 /**
@@ -336,6 +377,7 @@ function enableFlowColor() {
   computeFlowColors();
   // 对齐旧 flowColor()：默认给所有节点上流色（不覆盖已有指定颜色——当前仅流色，故全加）
   for (const n of state.nodes) flowColored.add(n.id);
+  writeFlowStore(graphKey(state.nodes), [...flowColored]); // 按当前图记住着色
   applyHighlights();
 }
 /** 对齐旧 clearSpecifiedColor()（Ctrl+Alt+H）：清除未选中节点的颜色，选中的保留。 */
@@ -343,6 +385,7 @@ function clearUnselectedColor() {
   for (const id of [...flowColored]) {
     if (!selectedIds.has(id)) flowColored.delete(id);
   }
+  writeFlowStore(graphKey(state.nodes), [...flowColored]);
   applyHighlights();
 }
 
@@ -605,6 +648,7 @@ function edgeDimColorFor(label, out) {
 }
 function toggleDimEdges() {
   dimEdgeOn = !dimEdgeOn;
+  persistViewToggles();
   const st = document.getElementById("dim-state");
   if (st) st.textContent = dimEdgeOn ? "维度着色：开" : "维度着色：关";
 }
@@ -1298,6 +1342,8 @@ function renderGraph(data, seedId) {
   statsEl.textContent = `${state.nodes.length} 节点 · ${state.edges.length} 边`;
   errorEl.textContent = "";
   renderResultRows(data.rows);
+  // 流色按"图"恢复/清空：同图重渲染恢复着色，换新图（节点集合变化）则清空，防止残留上一张图的颜色
+  applyFlowForGraph();
   applyHighlights();
 }
 
@@ -1596,6 +1642,13 @@ async function pollCurrent() {
       lastGraphSig = sig;
       return;
     }
+    // 全新搜索替换：new_graph 清空+查询可能在一次轮询间隙内完成，页面没看到"空"中间态，
+    // 若新图与当前渲染图毫无重叠则视为替换，先清空旧图再渲染（避免把新图并入旧图、旧节点残留颜色）。
+    if (state.nodes.length > 0 && Array.isArray(cur.nodes)) {
+      const curIds = new Set(cur.nodes.map((n) => n.id));
+      const overlap = state.nodes.some((n) => curIds.has(n.id));
+      if (!overlap) clearGraph();
+    }
     renderGraph(cur); // 增量并入：按 id 去重、保留已有节点位置（沉降动画）
     // 关键：只有成功渲染后才提交 sig。若渲染抛异常被 catch 吞掉，sig 不提交，下轮会重试，
     // 避免卡在旧图、必须手动刷新。
@@ -1642,6 +1695,7 @@ async function load() {
 }
 
 initThree();
+restoreViewToggles(); // 刷新后恢复流色/维度着色模式；换图/同图都会按当前图重算应用
 document.getElementById("build").textContent = `build ${BUILD}`;
 
 // [DBG] 自动自测：?autopick=1 时加载后自动停布局并选中第一个节点，触发像素对比日志
