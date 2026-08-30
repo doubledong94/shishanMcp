@@ -1004,10 +1004,12 @@ function setupInteraction() {
       if (Math.abs(e.clientX - drag.startX) + Math.abs(e.clientY - drag.startY) > 3) drag.moved = true;
       hideTooltip();
       if (drag.button === 0 || drag.button === 2) {
-        // 平移（正交 2D：世界单位/像素 = 视图高度 / 像素高）
+        // 平移（正交 2D）：屏幕增量 → 世界增量（屏幕 y 向下=+、世界 y 向上=+，故 y 取反；再按 roll 旋转）
         const worldPerPx = viewHeight / renderer.domElement.clientHeight;
-        viewTarget.x -= (dx * Math.cos(viewRotZ) + dy * Math.sin(viewRotZ)) * worldPerPx;
-        viewTarget.y -= (-dx * Math.sin(viewRotZ) + dy * Math.cos(viewRotZ)) * worldPerPx;
+        const wx = dx * Math.cos(viewRotZ) - dy * Math.sin(viewRotZ);
+        const wy = dx * Math.sin(viewRotZ) + dy * Math.cos(viewRotZ);
+        viewTarget.x -= wx * worldPerPx;
+        viewTarget.y += wy * worldPerPx;
         if (layoutMode === "2d") viewTarget.z = 0;
       } else if (drag.button === 1) {
         viewRotZ += dx * 0.005;
