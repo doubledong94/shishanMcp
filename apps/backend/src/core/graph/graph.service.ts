@@ -28,6 +28,8 @@ export interface GraphNode {
   subkind?: string;
   /** 运行时读写节点：read / write。 */
   access?: string;
+  /** 数据库稳定唯一标识（Neo4j 的 id 属性），可用 MATCH (n {id:<此值>}) 在后端定位。 */
+  stableId?: string;
 }
 
 export interface GraphEdge {
@@ -161,9 +163,18 @@ export class GraphService {
 
   // ---------- 当前工作图（增量并入 + 命名保存 / 开新图） ----------
 
-  /** 项目当前累积工作图（供固定 3D 页实时轮询跟随）。 */
+  /** 每个项目一个"待定位的稳定 id"。AI 拿到用户复制的 id 后 POST 到这里，前端轮询到即选中居中。 */
+  private locateId = new Map<string, string>();
+
+  setLocate(project: string, id: string) {
+    this.locateId.set(project, id);
+  }
+
+  /** 项目当前累积工作图（供固定 3D 页实时轮询跟随），附带可能的"待定位 id"。 */
   getCurrent(project: string) {
-    return this.readCurrent(project);
+    const cur = this.readCurrent(project);
+    const id = this.locateId.get(project);
+    return id ? { ...cur, locateId: id } : cur;
   }
 
   /** 把一次查询的结果并入当前工作图（按 id/边键去重），返回合并后的图与增量统计。 */
@@ -615,6 +626,7 @@ function extractGraphView(cypher: string, records: unknown[]): GraphView {
         ...(typeof props.line === "number" ? { line: props.line } : {}),
         ...(props.kind && kind === "Value" ? { subkind: String(props.kind) } : {}),
         ...(props.access ? { access: String(props.access) } : {}),
+        ...(props.id ? { stableId: String(props.id) } : {}),
       };
       addNode(id, String(label), kind, extra);
       return;

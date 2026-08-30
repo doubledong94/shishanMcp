@@ -1055,6 +1055,7 @@ function nodeInfoHtml(id) {
   }
   if (n.symbol) lines.push(`symbol: ${escHtml(n.symbol)}`);
   lines.push(`label: ${escHtml(n.label || id)}`);
+  if (n.stableId) lines.push(`id: ${escHtml(n.stableId)}`);
   return lines.join("\n");
 }
 
@@ -1887,6 +1888,7 @@ async function loadViews() {
 /** [live] 固定页实时跟随当前工作图：agent 调 query_graph → 增量并入；new_graph → 保存并清空。
  * 仅当下拉框为空（实时跟随）时跟随；选中某个已保存视图（pin）时暂停，避免被拽走。 */
 let lastGraphSig = "";
+let lastLocateId = null; // 已处理过的待定位稳定 id，避免重复聚焦
 async function pollCurrent() {
   const project = projectSel.value;
   if (!project) return;
@@ -1895,6 +1897,14 @@ async function pollCurrent() {
     const res = await fetch(`/api/graph/current?project=${encodeURIComponent(project)}`);
     if (!res.ok) return;
     const cur = await res.json();
+    // 外部定位：/api/graph/locate 设置的稳定 id → 当前图里找到并选中+居中
+    const loc = cur && cur.locateId;
+    if (loc && loc !== lastLocateId) {
+      lastLocateId = loc;
+      const target = state.nodes.find((n) => n.stableId === loc);
+      if (target) { selectedIds = new Set([target.id]); applyHighlights(); focusNode(target.id); toast("已定位节点"); }
+      else toast("定位：该节点不在当前图中");
+    }
     const nodes = (cur.nodes || []).length;
     const edges = (cur.edges || []).length;
     const sig = `${cur.revision || 0}:${nodes}:${edges}`;

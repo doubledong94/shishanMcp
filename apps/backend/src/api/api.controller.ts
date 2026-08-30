@@ -180,6 +180,19 @@ export class ApiController {
     return this.graph.getCurrent(project);
   }
 
+  /**
+   * 按稳定唯一 id（Neo4j 的 id 属性）在前端图定位：设置"待定位 id"，前端 /current 轮询到后
+   * 自动选中并居中该节点。与后端 MATCH (n {id:<值>}) 对应，两端定位同一个节点。
+   */
+  @Post("graph/locate")
+  locateNode(@Body() body: { project?: string; id?: string }) {
+    if (!body.project || !body.id) {
+      throw new BadRequestException("需要 project 和 id（稳定唯一标识）");
+    }
+    this.graph.setLocate(body.project, body.id);
+    return { project: body.project, id: body.id, locating: true };
+  }
+
   /** SCIP 索引概览（元信息 + 文档列表统计，供调试页查看器）。 */
   @Get("scip-index/:project/summary")
   async getScipSummary(@Param("project") project: string) {
