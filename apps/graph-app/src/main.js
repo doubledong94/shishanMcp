@@ -631,16 +631,17 @@ let dotLayoutOn = true;
 let dotNodes = new Set();   // 参与 NEXT 边的节点 id
 let dotRank = new Map();    // id -> NEXT 执行层 rank（rank 越大 → 执行越后）
 // Ranked 定向力导（DAG/flow）：xs=执行层横向间距(列拉力目标)，rankStrength=列拉力强度，ys=层内初始散开间距
-// xs：相邻执行步间距；ys：分支相对主链的纵向错开；两者世界单位
-const DOT_LAYOUT = { xs: 12, ys: 22, rankStrength: 0.10 };
+// 主链（事件）间距 / Value 数据坑的首行下移量 / 数据坑内上下叠的节距（世界单位）
+const DOT_LAYOUT = { x: 26, gutter: 16, vpitch: 12, rankStrength: 0.10 };
+
+function nodeKind(id) { const n = nodesById.get(id); return n ? (n.kind || n.label || "") : ""; }
 
 /**
- * 横向单线执行链：把被 NEXT 连接的节点按执行顺序排成一条从左到右的线并固定位置。
- * 步骤：
- *  1) rank = 到某 NEXT 起点的最长路径执行层（允许有环：迭代松弛有界收敛）；
- *  2) 对 NEXT 边做拓扑序（Kahn，同层按 rank 降序继续，让主链单调推进）得到顺序 sequence；
- *  3) 主链（rank 严格递增的那条最长路径）落在 y=0，分支节点按 rank 号上下扇开，
- *     形成"一条主直线 + 分支小幅上下错开"的清爽横向流。
+ * NEXT 链"Value 降层"布局（固定位置）：
+ *  - 主链 = 事件（CalledMethod / Condition），按执行顺序（NEXT 拓扑序）排成一条从左到右的线，y=0；
+ *  - 数据坑 = Value 节点（实参槽/返回值/读取），放到与其相邻两个事件的横向中点下方（y 下移 gutter），
+ *    同一对事件之间的多个 Value 在坑里上下叠（vpitch 节距）。
+ * 这样函数的执行顺序一目了然，Value 仍可见（不隐藏）、不占用主链横向步距，线更短更清爽。
  */
 function computeDotLayout() {
   const prevOf = new Map(), nextOf = new Map(), incident = new Set();
@@ -655,7 +656,7 @@ function computeDotLayout() {
   }
   if (incident.size === 0) { dotNodes = incident; dotRank.clear(); return; }
   const ids = [...incident];
-  // 1) rank = 最长路径执行层
+  // 1) rank = 最长路径执行层（用于拓扑序 tie-break，让主链单调推进）
   const rank = new Map(); for (const id of ids) rank.set(id, 0);
   for (let g = 0; g < ids.length; g++) {
     let ch = false;
@@ -664,14 +665,14 @@ function computeDotLayout() {
     }
     if (!ch) break;
   }
-  // 2) 拓扑序（Kahn，待处理按 rank 降序：优先继续推进主链）
+  // 2) NEXT 拓扑序（Kahn，待处理按 rank 降序）
   const indeg = new Map(); for (const id of ids) indeg.set(id, 0);
   for (const [f, arr] of nextOf) for (const t of arr) if (incident.has(t)) indeg.set(t, (indeg.get(t) || 0) + 1);
   const ready = ids.filter((id) => (indeg.get(id) || 0) === 0).sort((a, b) => rank.get(b) - rank.get(a));
   const taken = new Set(), seq = [];
-  const popNext = () => { ready.sort((a, b) => rank.get(b) - rank.get(a)); return ready.pop(); };
   let cur;
-  while ((cur = popNext()) !== undefined) {
+  const pop = () => { ready.sort((a, b) => rank.get(b) - rank.get(a)); return ready.pop(); };
+  while ((cur = pop()) !== undefined) {
     if (taken.has(cur)) continue;
     taken.add(cur); seq.push(cur);
     for (const t of nextOf.get(cur) || []) {
@@ -681,37 +682,28 @@ function computeDotLayout() {
     }
   }
   for (const id of ids) if (!taken.has(id)) seq.push(id); // 环剩余节点兜底
-  // 3) 主链：从某个 rank 0 起点沿"rank 恰好 +1"的后继走到尽头，作为 y=0 的主直线
-  const trunk = new Set();
-  {
-    let s = ids.find((id) => rank.get(id) === 0 && (prevOf.get(id) || []).every((p) => !incident.has(p)));
-    if (s === undefined) s = ids.find((id) => rank.get(id) === 0) ?? null;
-    while (s != null) {
-      trunk.add(s);
-      let next = null;
-      for (const t of nextOf.get(s) || []) {
-        if (!incident.has(t) || trunk.has(t)) continue;
-        if (rank.get(t) === rank.get(s) + 1) { next = t; break; } // 主链走 rank 严格 +1 的第一个后继
-      }
-      s = next;
-    }
-  }
-  // 4) 落位：x = 拓扑序位置（一条从左到右的线）；主链 y=0，分支按 rank 上下扇开错开
-  const seqPos = new Map(); ids.forEach((id, i) => seqPos.set(id, i));
-  const fanCount = new Map(); // rank -> 已扇开的非主链节点数
-  for (const id of ids) {
+  // 3) 主链事件（CalledMethod / Condition）按执行顺序排线；Value 放数据坑
+  const spine = seq.filter((id) => { const k = nodeKind(id); return k === "CalledMethod" || k === "Condition"; });
+  const spineX = new Map(); spine.forEach((id, i) => spineX.set(id, i * DOT_LAYOUT.x));
+  const gutterSlots = new Map(); // 数据坑锚点(相邻事件对或单事件) -> 已用槽位
+  for (const id of seq) {
     const p = nodePos.get(id);
-    p.x = seqPos.get(id) * DOT_LAYOUT.xs;
-    if (trunk.has(id)) { p.y = 0; }
+    if (spineX.has(id)) { p.x = spineX.get(id); p.y = 0; }
     else {
-      const r = rank.get(id);
-      const k = fanCount.get(r) || 0;
-      fanCount.set(r, k + 1);
-      p.y = (k % 2 === 0 ? 1 : -1) * (Math.floor(k / 2) + 1) * DOT_LAYOUT.ys;
+      // Value：横向取相邻前驱/后继事件的横坐标中点（首尾退化为唯一事件）
+      let px = null, nx = null;
+      for (const q of prevOf.get(id) || []) if (spineX.has(q)) { px = spineX.get(q); break; }
+      for (const q of nextOf.get(id) || []) if (spineX.has(q)) { nx = spineX.get(q); break; }
+      const ax = px != null && nx != null ? (px + nx) / 2 : (px ?? nx ?? 0);
+      p.x = ax;
+      const key = `${px ?? ""}->${nx ?? ""}`;
+      const g = gutterSlots.get(key) || 0;
+      gutterSlots.set(key, g + 1);
+      p.y = -(DOT_LAYOUT.gutter + g * DOT_LAYOUT.vpitch);
     }
     p.z = 0;
   }
-  // 整体居中：x、y 各自去掉均值，让主链大致围绕原点
+  // 4) 整体居中：主链围绕原点
   let cx = 0, cy = 0;
   for (const id of ids) { cx += nodePos.get(id).x; cy += nodePos.get(id).y; }
   cx /= ids.length; cy /= ids.length;
