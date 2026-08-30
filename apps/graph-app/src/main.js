@@ -685,15 +685,18 @@ function computeDotLayout() {
   // 3) 主链事件（CalledMethod / Condition）按执行顺序排线；Value 放数据坑
   const spine = seq.filter((id) => { const k = nodeKind(id); return k === "CalledMethod" || k === "Condition"; });
   const spineX = new Map(); spine.forEach((id, i) => spineX.set(id, i * DOT_LAYOUT.x));
-  const gutterSlots = new Map(); // 数据坑锚点(相邻事件对或单事件) -> 已用槽位
+  const seqIdx = new Map(); seq.forEach((id, i) => seqIdx.set(id, i));
+  const gutterSlots = new Map(); // 数据坑锚点(最近的相邻事件对) -> 已用槽位
   for (const id of seq) {
     const p = nodePos.get(id);
     if (spineX.has(id)) { p.x = spineX.get(id); p.y = 0; }
     else {
-      // Value：横向取相邻前驱/后继事件的横坐标中点（首尾退化为唯一事件）
+      // Value：横向锚定到执行序列里"最近的前一个/后一个主链事件"的横坐标中点，避免邻接也是
+      // Value（value→value 连续段）时取不到锚点而全都落到 x=0（第一列堆叠）。
+      const idx = seqIdx.get(id);
       let px = null, nx = null;
-      for (const q of prevOf.get(id) || []) if (spineX.has(q)) { px = spineX.get(q); break; }
-      for (const q of nextOf.get(id) || []) if (spineX.has(q)) { nx = spineX.get(q); break; }
+      for (let i = idx - 1; i >= 0; i--) if (spineX.has(seq[i])) { px = spineX.get(seq[i]); break; }
+      for (let i = idx + 1; i < seq.length; i++) if (spineX.has(seq[i])) { nx = spineX.get(seq[i]); break; }
       const ax = px != null && nx != null ? (px + nx) / 2 : (px ?? nx ?? 0);
       p.x = ax;
       const key = `${px ?? ""}->${nx ?? ""}`;
