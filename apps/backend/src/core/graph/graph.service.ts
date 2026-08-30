@@ -24,6 +24,10 @@ export interface GraphNode {
   symbol?: string;
   file?: string;
   line?: number;
+  /** Value 节点的子类型（CALLED_PARAM/LOCAL_VAR/FIELD/RETURN/INDEX…），kind 固定为 "Value"。 */
+  subkind?: string;
+  /** 运行时读写节点：read / write。 */
+  access?: string;
 }
 
 export interface GraphEdge {
@@ -579,7 +583,7 @@ function extractGraphView(cypher: string, records: unknown[]): GraphView {
   const nodeSeen = new Set<string>();
   const edgeSeen = new Set<string>();
 
-  function addNode(id: string, label: string, kind: string, extra?: { symbol?: string; file?: string; line?: number }) {
+  function addNode(id: string, label: string, kind: string, extra?: { symbol?: string; file?: string; line?: number; subkind?: string; access?: string }) {
     if (nodeSeen.has(id)) return;
     nodeSeen.add(id);
     nodes.push({ id, label, kind, ...(extra || {}) });
@@ -609,6 +613,8 @@ function extractGraphView(cypher: string, records: unknown[]): GraphView {
         ...(props.symbol ? { symbol: String(props.symbol) } : {}),
         ...(props.file ? { file: String(props.file) } : {}),
         ...(typeof props.line === "number" ? { line: props.line } : {}),
+        ...(props.kind && kind === "Value" ? { subkind: String(props.kind) } : {}),
+        ...(props.access ? { access: String(props.access) } : {}),
       };
       addNode(id, String(label), kind, extra);
       return;

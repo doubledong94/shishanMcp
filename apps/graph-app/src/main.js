@@ -1023,6 +1023,11 @@ function nodeInfoHtml(id) {
   const n = nodesById.get(id);
   if (!n) return "";
   const lines = [`kind: ${escHtml(n.kind || "-")}`];
+  // Value 节点：额外显示子类型（实参槽/返回值/字段/局部变量…）与读/写
+  if (n.kind === "Value") {
+    const sub = n.subkind || "-";
+    lines.push(`value kind: ${escHtml(sub)}${n.access ? ` (${escHtml(n.access)})` : ""}`);
+  }
   if (n.symbol) lines.push(`symbol: ${escHtml(n.symbol)}`);
   lines.push(`label: ${escHtml(n.label || id)}`);
   return lines.join("\n");
