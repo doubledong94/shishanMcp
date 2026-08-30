@@ -20,6 +20,10 @@ export interface GraphNode {
   id: string;
   label: string;
   kind: string;
+  /** 完整 SCIP 符号（函数/字段/变量的全名），供 hover 提示展示来源。 */
+  symbol?: string;
+  file?: string;
+  line?: number;
 }
 
 export interface GraphEdge {
@@ -575,10 +579,10 @@ function extractGraphView(cypher: string, records: unknown[]): GraphView {
   const nodeSeen = new Set<string>();
   const edgeSeen = new Set<string>();
 
-  function addNode(id: string, label: string, kind: string) {
+  function addNode(id: string, label: string, kind: string, extra?: { symbol?: string; file?: string; line?: number }) {
     if (nodeSeen.has(id)) return;
     nodeSeen.add(id);
-    nodes.push({ id, label, kind });
+    nodes.push({ id, label, kind, ...(extra || {}) });
   }
   function addEdge(from: string, to: string, label: string) {
     const key = `${from}->${to}->${label}`;
@@ -601,7 +605,12 @@ function extractGraphView(cypher: string, records: unknown[]): GraphView {
       const props = v.properties || {};
       const kind = labels[0] || "Node";
       const label = props.name || props.path || props.signature || props.kind || labels[0] || id;
-      addNode(id, String(label), kind);
+      const extra = {
+        ...(props.symbol ? { symbol: String(props.symbol) } : {}),
+        ...(props.file ? { file: String(props.file) } : {}),
+        ...(typeof props.line === "number" ? { line: props.line } : {}),
+      };
+      addNode(id, String(label), kind, extra);
       return;
     }
     if (isNeo4jRel(v)) {
