@@ -632,7 +632,7 @@ let dotNodes = new Set();   // 参与 NEXT 边的节点 id
 let dotRank = new Map();    // id -> NEXT 执行层 rank（rank 越大 → 执行越后）
 // Ranked 定向力导（DAG/flow）：xs=执行层横向间距(列拉力目标)，rankStrength=列拉力强度，ys=层内初始散开间距
 // 主链（事件）间距 / Value 数据坑的首行下移量 / 数据坑内上下叠的节距（世界单位）
-const DOT_LAYOUT = { x: 26, gutter: 16, vpitch: 12, rankStrength: 0.10 };
+const DOT_LAYOUT = { x: 30, gutter: 22, vpitch: 24, rankStrength: 0.10 };
 
 function nodeKind(id) { const n = nodesById.get(id); return n ? (n.kind || n.label || "") : ""; }
 
@@ -709,6 +709,34 @@ function computeDotLayout() {
   cx /= ids.length; cy /= ids.length;
   for (const id of ids) { const p = nodePos.get(id); p.x -= cx; p.y -= cy; }
   dotNodes = incident; dotRank = rank;
+  // 5) 去重叠：固定节点靠得太近时，把可动的 Value 微微推开（主链事件保持 y=0 不动）
+  resolveFixedOverlaps(ids, 6);
+}
+
+/** 固定布局去重叠：推挤靠得过近的节点；主链事件（CalledMethod/Condition）保持原位，只动 Value。 */
+function resolveFixedOverlaps(ids, minSep) {
+  const arr = [];
+  for (const id of ids) { const v = nodePos.get(id); if (v) arr.push({ id, x: v.x, y: v.y }); }
+  const isEvent = (id) => { const k = nodeKind(id); return k === "CalledMethod" || k === "Condition"; };
+  for (let iter = 0; iter < 10; iter++) {
+    let moved = false;
+    for (let i = 0; i < arr.length; i++) for (let j = i + 1; j < arr.length; j++) {
+      const A = arr[i], B = arr[j];
+      const dx = B.x - A.x, dy = B.y - A.y;
+      const d2 = dx * dx + dy * dy;
+      if (d2 < 1e-6 || d2 >= minSep * minSep) continue;
+      const d = Math.sqrt(d2);
+      const push = (minSep - d) / 2;
+      const ux = dx / d, uy = dy / d;
+      const Ai = !isEvent(A.id), Bi = !isEvent(B.id); // 可带动:Value
+      if (Ai && Bi) { A.x -= ux * push; A.y -= uy * push; B.x += ux * push; B.y += uy * push; moved = true; }
+      else if (Ai) { A.x -= ux * push * 2; A.y -= uy * push * 2; moved = true; }
+      else if (Bi) { B.x += ux * push * 2; B.y += uy * push * 2; moved = true; }
+      // 两事件已由间距参数避开，重叠则跳过不动
+    }
+    for (const o of arr) { const v = nodePos.get(o.id); v.x = o.x; v.y = o.y; }
+    if (!moved) break;
+  }
 }
 
 // ---------- 按维度着色边（五维度 ↔ 边颜色） ----------
