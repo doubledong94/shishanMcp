@@ -42,7 +42,7 @@
 | 谓词 | 方向 | 图关系 | 新项目等价 |
 | --- | --- | --- | --- |
 | `forwardDataStep/backwardDataStep` | 数据流动 | `flow(methodKey, Src, Dst)` 里 src/dst 间跨越 step | `(:Value)-[:FLOWS]->(:Value)` |
-| `forwardTimingStep/backwardTimingStep` | 时机传递 | calledMethod→step→method | `(:CalledMethod)-[:CALLS]->(:Method)`（+ ROOT/SCOPED_BY 锚定方法） |
+| `forwardTimingStep/backwardTimingStep` | 时机传递 | calledMethod→step→method | `(:CalledMethod)-[:CALLS]->(:Method)`（+ ROOT/LEADS_TO 锚定方法） |
 | `forwardDataOverride/backwardDataOverride` | 数据多态 | 覆写方法的参数/返回值流 | 暂用 `OVERRIDES` + 跨方法绑定组合 |
 | `forwardTimingOverride/backwardTimingOverride` | 调用多态 | 抽象调用分发到实现 | `(:CalledMethod)-[:CALLS]->(:Method)` + `(:Method)-[:OVERRIDES]->(:Method)` |
 
@@ -70,12 +70,12 @@
 | `Instance` | `nodeInstanceOf(ClassScope, Class, Instance)` | 类型为 C 的字段/参数/返回 | 类型在声明属性（`Field.type`/`Value`）或 `TYPED_BY` 边 |
 | `Parameter` | `nodeParameterOf(Method, Param)` | 方法形参 | `MATCH (:Method{...})-[:HAS_PARAM]->(p:Value{kind:'PARAM'})` |
 | `Return` | `nodeReturnOf(Method, Return)` | 方法返回值 | 方法返回值槽：`(:Value{kind:'RETURN'})`（`RETURNS` 边） |
-| `CalledMethod` | `nodeCalledMethodOf(Method, CM)` | 方法内的调用点 | `MATCH (:Method{...})-[:ROOT]->(:Condition)<-[:SCOPED_BY]-(:CalledMethod)` |
+| `CalledMethod` | `nodeCalledMethodOf(Method, CM)` | 方法内的调用点 | `MATCH (:Method{...})-[:ROOT]->(:Condition)-[:LEADS_TO]->(:CalledMethod)` |
 | `CalledParam` | `nodeCalledParameterOf(Param, CP)` | 实参槽 | `MATCH (:Value{kind:'CALLED_PARAM'})-[:ARG_OF]->(:CalledMethod)` |
 | `CalledReturn` | `nodeCalledReturnOf(Return, CR)` | 返回使用槽 | `MATCH (:Value{kind:'CALLED_RETURN'})` |
 | `MethodUse` | `nodeMethodUse(Method, MethodUse)` | 方法调用了谁 | 经 `CalledMethod-[:CALLS]->(:Method)` 推导 |
 | `FieldUse` | `nodeFieldUsedBy(Method, FieldUsedBy)` | 方法用了哪些字段 | 经 `REF`/`FLOWS` 推导 |
-| `MethodUsedBy` | `nodeMethodUsedBy(Method, MethodUsedBy)` | 谁调用了此方法 | `(:Method)<-[:CALLS]-(:CalledMethod)<-[:SCOPED_BY]-...` |
+| `MethodUsedBy` | `nodeMethodUsedBy(Method, MethodUsedBy)` | 谁调用了此方法 | `(:Method)<-[:CALLS]-(:CalledMethod)<-[:LEADS_TO]-...` |
 | `SuperOf/SubOf` | `nodeSuperOf/SubOf(Super, Sub)` | 父子类 | `(:Class)-[:EXTENDS]->(:Class)`（含 `IMPLEMENTS`） |
 | `Union/Intersection/Difference` | `nodeUnion/Intersection/Difference(N1,N2,N)` | 节点集合运算 | cypher `UNION` / 双 MATCH 交集 / `WHERE NOT` |
 
@@ -155,7 +155,7 @@ MATCH (:Method{name:$m})-[:CALLS]<-[:CALLS]-(:CalledMethod)-[:ARG_OF]<-
 
 | 方向 | preset | cypher 核心 |
 | --- | --- | --- |
-| 时机 | `calls` / `callers` | `(:Method)-[:ROOT]->(:Condition)<-[:SCOPED_BY]-(:CalledMethod)-[:CALLS]->(:Method)` |
+| 时机 | `calls` / `callers` | `(:Method)-[:ROOT]->(:Condition)-[:LEADS_TO]->(:CalledMethod)-[:CALLS]->(:Method)` |
 | 数据 | `dataflow` | `(:Value)-[:FLOWS*1..6]->(:Value)` |
 | 逻辑 | `controls` | `(:Value)-[:CONTROLS]->(:Condition)-[:LEADS_TO]->(:CalledMethod)` |
 | 嵌套 | `nesting` | `(:Value)-[:REF]->(:CalledMethod)-[:CALLS]->(:Method)` |
@@ -254,11 +254,11 @@ RETURN p LIMIT 20
 | --- | --- | --- |
 | `ARG_OF` | `Value`（CALLED_PARAM）→`CalledMethod` | 实参进出调用点——数据维度的接头 |
 | `RET_OF` | `Value`（CALLED_RETURN）→`CalledMethod` | 返回使用进出调用点——数据维度的接头 |
-| `SCOPED_BY` | `Value`/`CalledMethod`→`Condition` | 把运行时节点/调用点锚定到其包围分支——逻辑/时机解析的锚 |
+| `LEADS_TO` | `Condition`→`Value`/`CalledMethod` | 统一锚定边：把运行时 Value（数据作用域）与调用点锚定到其包围条件/方法根（恒发） |
 
 > 结论：五维度=流动/传递方向（`CALLS`/`FLOWS`/条件树/`REF`/`INDEX`/`NEXT`）；
 > 未纳入的或是静态结构与类型层次（`DECLARES`/`HAS_PARAM`/`RETURNS`/`EXTENDS`/`IMPLEMENTS`/`TYPED_BY`/`OVERRIDES`）——
-> 为维度提供节点集合与类型信息，或是维度交接的接头/锚（`ARG_OF`/`RET_OF`/`SCOPED_BY`）。
+> 为维度提供节点集合与类型信息，或是维度交接的接头/锚（`ARG_OF`/`RET_OF`/`LEADS_TO`——运行时节点的条件锚定统一走 `LEADS_TO`）。
 
 ## 12. 已实现 / 待实现对照
 

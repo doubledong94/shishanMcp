@@ -22,7 +22,7 @@ const PRESETS: Record<string, { description: string; needsParam: boolean; cypher
     description: "被调方法的所有调用方（谁调用了我）",
     needsParam: false,
     cypher:
-      "MATCH (m:Method {projectId:$project})-[:ROOT]->(rc:Condition)<-[:SCOPED_BY]-(cm:CalledMethod)-[:CALLS]->(callee:Method) RETURN DISTINCT m, cm, callee LIMIT 500",
+      "MATCH (m:Method {projectId:$project})-[:ROOT]->(rc:Condition)-[:LEADS_TO]->(cm:CalledMethod)-[:CALLS]->(callee:Method) RETURN DISTINCT m, cm, callee LIMIT 500",
   },
   branches: {
     description: "所有分支及其通往的调用（逻辑控制）",
