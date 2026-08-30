@@ -1494,6 +1494,8 @@ function mergeView(view) {
   const edges = view.edges || [];
   const seenNode = new Set(state.nodes.map((n) => n.id));
   for (const n of nodes) {
+    // 跳过后端为"纯标量查询结果"捏的 Result 占位节点，不展示、不污染工作图
+    if (n && n.kind === "Result") continue;
     if (!seenNode.has(n.id)) {
       state.nodes.push(n);
       seenNode.add(n.id);
