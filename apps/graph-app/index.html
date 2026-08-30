@@ -38,6 +38,9 @@
       .panel button.secondary:hover { background: #484f58; }
       .panel .view-ctrl { display: flex; gap: 8px; margin-top: 8px; }
       .panel .view-ctrl button { margin-top: 0; width: auto; flex: 1; font-size: 12px; }
+      .zoom-ctrl { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+      .zoom-ctrl label { color: #8b949e; font-size: 12px; margin: 0; white-space: nowrap; }
+      .zoom-ctrl input[type="range"] { flex: 1; margin: 0; padding: 0; accent-color: #58a6ff; }
 
       /* 标量查询结果（query_graph / 探索返回的非图数据） */
       .result-box { margin-top: 12px; border-top: 1px solid #30363d; padding-top: 8px; }
@@ -291,6 +294,10 @@
         <div class="view-ctrl">
           <button id="mode-btn" class="secondary">切到 3D</button>
           <button id="layout-btn" class="secondary">暂停布局</button>
+        </div>
+        <div class="zoom-ctrl">
+          <label for="zoom">缩放</label>
+          <input type="range" id="zoom" min="0" max="100" value="45" title="放大 / 缩小画面" />
         </div>
       </div>
       <div class="hint">

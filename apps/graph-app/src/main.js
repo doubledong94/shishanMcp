@@ -30,6 +30,7 @@ const expandBtn = document.getElementById("expand-btn");
 const resetBtn = document.getElementById("reset-btn");
 const modeBtn = document.getElementById("mode-btn");
 const layoutBtn = document.getElementById("layout-btn");
+const zoomEl = document.getElementById("zoom");
 
 // ===================== 3D 图谱可视化（对齐旧项目 shishandaimaViewer） =====================
 const tween = createTweenEngine();
@@ -723,6 +724,34 @@ function cameraForMode() {
   }
 }
 
+// ---------- 缩放拖拽条（放大 / 缩小画面，2D/3D 通用，与现实时滚轮双向同步） ----------
+const ZOOM_MIN = 5, ZOOM_MAX = 2000;
+let zoomDragging = false;
+function zoomFromDist(d) {
+  const c = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, d));
+  return Math.round((100 * Math.log(c / ZOOM_MAX)) / Math.log(ZOOM_MIN / ZOOM_MAX));
+}
+function distFromZoom(v) {
+  const p = Math.max(0, Math.min(100, v)) / 100;
+  return ZOOM_MAX * Math.pow(ZOOM_MIN / ZOOM_MAX, p); // 指数映射：滑到右=拉近(缩小 dist)
+}
+function applyZoom() {
+  const d = distFromZoom(+zoomEl.value);
+  if (layoutMode === "2d") {
+    viewDist = d;
+  } else {
+    const dir = camera.position.clone().sub(controls.target);
+    if (dir.lengthSq() < 1e-9) dir.set(0, 0, 1);
+    dir.normalize();
+    camera.position.copy(controls.target).addScaledVector(dir, d);
+    controls.update();
+  }
+}
+zoomEl.addEventListener("pointerdown", () => { zoomDragging = true; });
+zoomEl.addEventListener("input", applyZoom);
+zoomEl.addEventListener("pointerup", () => { zoomDragging = false; });
+zoomEl.addEventListener("pointercancel", () => { zoomDragging = false; });
+
 function centerView() {
   const nodes = state.nodes;
   if (!nodes.length) return;
@@ -1207,6 +1236,12 @@ function animate(now) {
     }
     cameraForMode();
     if (layoutMode === "3d") controls.update();
+    // 缩放条反向同步：滚轮/平移导致实际缩放变化时，让拖拽条跟随（拖拽中不抢焦点）
+    if (!zoomDragging) {
+      const d = layoutMode === "2d" ? viewDist : camera.position.distanceTo(controls.target);
+      const zv = zoomFromDist(d);
+      if (+zoomEl.value !== zv) zoomEl.value = String(zv);
+    }
     renderer.render(scene, camera); // 关键：渲染也包进 try，出错打日志不冻结画布
   } catch (err) {
     if (!__frameErrShown) {
