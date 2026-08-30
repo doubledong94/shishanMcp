@@ -197,7 +197,15 @@ function runSteps(steps, cwd, project) {
       // 工作目录名（<DATA_ROOT>/<project>/work 的 basename 是 "work"）。
       const env =
         cmd === "scip-java"
-          ? { ...process.env, SCIP_JAVA_OPTS: "-Xmx6g", SCIP_PROJECT_NAME: project }
+          ? {
+              ...process.env,
+              SCIP_JAVA_OPTS: "-Xmx6g",
+              SCIP_PROJECT_NAME: project,
+              // 保证 Gradle 无论是否读到 gradle.properties 都能看到 JDK21/JDK11 工具链：
+              // 以 GRADLE_OPTS 让 daemon JVM 带上 system property，根治 compileJavaModuleInfo
+              // "Cannot find languageVersion=11"（toolchain auto-provisioning 已关）。
+              GRADLE_OPTS: `${process.env.GRADLE_OPTS || ""} -Dorg.gradle.java.installations.paths=/opt/jdk21,/opt/jdk11`.trim(),
+            }
           : process.env;
       const proc = spawn(cmd, args, { cwd, shell: false, env });
       let out = "";
