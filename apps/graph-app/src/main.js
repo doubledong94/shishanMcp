@@ -679,6 +679,9 @@ function stepLayout(dt) {
   const n = nodes.length;
   if (!n) return;
   const k = Math.min(dt / 16.666, 2) * LAYOUT.temperature;
+  // 力导中鼠标拖拽的节点：先快照其位置，布局计算后还原（该节点不被力导移走，其余照常动画）
+  const dv0 = dragNodeId != null ? nodePos.get(dragNodeId) : null;
+  _dragPin = dv0 ? dv0.clone() : null;
   // 斥力（所有节点对）
   for (let i = 0; i < n; i++) {
     const a = nodePos.get(nodes[i].id);
@@ -719,6 +722,11 @@ function stepLayout(dt) {
     v.z -= cz * k * LAYOUT.center;
   }
   if (layoutMode === "2d") for (const v of nodePos.values()) v.z = 0;
+  // 力导中被拖拽的节点：位置由鼠标决定，布局计算后强制还原，不被力导移走；其余节点照常动画
+  if (dragNodeId != null) {
+    const dv = nodePos.get(dragNodeId);
+    if (dv && _dragPin) dv.copy(_dragPin);
+  }
   updateNodePositions(); // 布局每帧更新实例矩阵
 }
 
@@ -855,6 +863,8 @@ function pickNode(clientX, clientY) {
 }
 
 const drag = { active: false, button: -1, startX: 0, startY: 0, lastX: 0, lastY: 0, moved: false };
+let dragNodeId = null; // 力导中鼠标拖拽的节点 id（2D，命中节点时置位）
+let _dragPin = null;   // stepLayout 中被拖节点的鼠标位快照（力导后还原）
 // 双击态机：同一节点 500ms 内两次单击 = 双击聚焦（复刻旧项目 DoubleClickStateMachine，
 // 避免与「单击切换选中」冲突：第二次单击不再切换，而是选中+聚焦）。
 const DBL_TIMEOUT = 500;
@@ -991,11 +1001,27 @@ function setupInteraction() {
       drag.startX = drag.lastX = e.clientX;
       drag.startY = drag.lastY = e.clientY;
       drag.moved = false;
+      // 命中节点 → 进入"节点拖拽"（该节点位置跟鼠标走，力导仍跑）；未命中 → 视图平移
+      dragNodeId = e.button === 0 ? pickNode(e.clientX, e.clientY) : null;
       el.setPointerCapture(e.pointerId);
     }
   });
 
   el.addEventListener("pointermove", (e) => {
+    // 节点拖拽：被拖节点位置跟鼠标走（正交 2D：世界增量 = 屏幕增量 × 世界每像素；屏幕下=世界下）
+    if (layoutMode === "2d" && dragNodeId != null) {
+      const s = viewHeight / renderer.domElement.clientHeight;
+      const v = nodePos.get(dragNodeId);
+      if (v) {
+        v.x += (e.clientX - drag.lastX) * s;
+        v.y -= (e.clientY - drag.lastY) * s;
+      }
+      drag.lastX = e.clientX;
+      drag.lastY = e.clientY;
+      if (Math.abs(e.clientX - drag.startX) + Math.abs(e.clientY - drag.startY) > 3) drag.moved = true;
+      hideTooltip();
+      return;
+    }
     if (layoutMode === "2d" && drag.active) {
       const dx = e.clientX - drag.lastX;
       const dy = e.clientY - drag.lastY;
@@ -1027,7 +1053,8 @@ function setupInteraction() {
   });
 
   const endPointer = (e) => {
-    // 2D 拖拽（平移/旋转）收尾
+    // 2D 拖拽（节点拖拽 / 平移旋转）收尾
+    dragNodeId = null;
     if (layoutMode === "2d" && drag.active) {
       drag.active = false;
       if (drag.button === 0 && drag.moved) { /* 平移过，不作为点击 */ }
