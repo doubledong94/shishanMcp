@@ -1019,7 +1019,6 @@ function isTypingTarget(e) {
   return t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT");
 }
 
-function escHtml(s) { return String(s).replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c])); }
 function nodeInfoHtml(id) {
   const n = nodesById.get(id);
   if (!n) return "";
