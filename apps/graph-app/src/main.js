@@ -627,12 +627,14 @@ function nodeAlphaFor(id) {
 // ---------- NEXT 节点 DOT 分层固定布局 ----------
 // dotLayoutOn：为 true 时，被 NEXT 连接的节点用 dot（分层）布局并固定位置，不参与力导；
 // 其余（非 NEXT）节点照常力导，并受固定节点排斥、绕开它们。
-let dotLayoutOn = true;
-let dotNodes = new Set();   // 参与 NEXT 边的节点 id
-let dotRank = new Map();    // id -> NEXT 执行层 rank（rank 越大 → 执行越后）
+let dotLayoutOn = false;
+let dotNodes = new Set();   // 固定骨架节点 id（= 条件节点）
+let dotRank = new Map();    // id -> NEXT 执行层 rank（顺序参考，暂不用）
+let nextAnchors = new Map(); // NEXT 非条件节点 id -> 归属条件坐标（力导锚点）
+let _layoutTelemetry = 0;    // 布局遥测计数（每 ~120 帧上报一次自由点-锚点距离）
 // Ranked 定向力导（DAG/flow）：xs=执行层横向间距(列拉力目标)，rankStrength=列拉力强度，ys=层内初始散开间距
 // 主链（事件）间距 / Value 数据坑的首行下移量 / 数据坑内上下叠的节距（世界单位）
-const DOT_LAYOUT = { x: 30, gutter: 22, vpitch: 24, leadGap: 16, rankStrength: 0.10 };
+const DOT_LAYOUT = { cw: 56, levelY: 104, body: 28, bx: 16, anchor: 1.6, nextSpring: 0.6, repFrac: 0.15, rankStrength: 0.10 };
 
 function nodeKind(id) { const n = nodesById.get(id); return n ? (n.kind || n.label || "") : ""; }
 
@@ -644,6 +646,7 @@ function nodeKind(id) { const n = nodesById.get(id); return n ? (n.kind || n.lab
  * 这样函数的执行顺序一目了然，Value 仍可见（不隐藏）、不占用主链横向步距，线更短更清爽。
  */
 function computeDotLayout() {
+  if (!dotLayoutOn) { dotNodes.clear(); nextAnchors.clear(); dotRank.clear(); return; } // 默认全量力导
   const prevOf = new Map(), nextOf = new Map(), incident = new Set();
   for (const e of state.edges) {
     if (e.label !== "NEXT") continue;
@@ -682,61 +685,77 @@ function computeDotLayout() {
     }
   }
   for (const id of ids) if (!taken.has(id)) seq.push(id); // 环剩余节点兜底
-  // 3) 主链事件（CalledMethod / Condition）按执行顺序排线；Value 放数据坑
-  const spine = seq.filter((id) => { const k = nodeKind(id); return k === "CalledMethod" || k === "Condition"; });
-  const spineX = new Map(); spine.forEach((id, i) => spineX.set(id, i * DOT_LAYOUT.x));
-  const seqIdx = new Map(); seq.forEach((id, i) => seqIdx.set(id, i));
-  const gutterSlots = new Map(); // 数据坑锚点(最近的相邻事件对) -> 已用槽位
-  const leadCounts = new Map(), trailCounts = new Map(); // 首/尾无锚校准值的水平展开计数
-  const leadUsed = new Map(), trailUsed = new Map();
-  // 第一遍：统计每个前导/后随值属于哪个事件，确定水平展开槽位数
-  for (const id of seq) {
-    if (spineX.has(id)) continue;
-    const idx = seqIdx.get(id);
-    let px = null, nx = null;
-    for (let i = idx - 1; i >= 0; i--) if (spineX.has(seq[i])) { px = spineX.get(seq[i]); break; }
-    for (let i = idx + 1; i < seq.length; i++) if (spineX.has(seq[i])) { nx = spineX.get(seq[i]); break; }
-    if (px == null && nx != null) leadCounts.set(nx, (leadCounts.get(nx) || 0) + 1);
-    else if (px != null && nx == null) trailCounts.set(px, (trailCounts.get(px) || 0) + 1);
+  // 3) 条件决策树骨架（自上而下）：从 METHOD 根条件出发，按 SUB(then嵌套)/ELSE(else分支) 递归下沉，
+  //    x 按 DFS 访问序、y 按层级(levelY)；事件(调用/Value)填在归属条件的下方一行(owner 错开)。
+  const isCond = (id) => nodeKind(id) === "Condition";
+  const condSet = new Set(ids.filter(isCond));
+  const subOf = new Map(), elseOf = new Map(), hasParent = new Set();
+  for (const e of state.edges) {
+    if (!condSet.has(e.from) || !condSet.has(e.to)) continue;
+    if (e.label === "SUB") {
+      if (!subOf.has(e.from)) subOf.set(e.from, []);
+      subOf.get(e.from).push(e.to); hasParent.add(e.to);
+    } else if (e.label === "ELSE") {
+      elseOf.set(e.from, e.to); hasParent.add(e.to);
+    }
   }
-  for (const id of seq) {
-    const p = nodePos.get(id);
-    if (spineX.has(id)) { p.x = spineX.get(id); p.y = 0; }
-    else {
-      // Value：横向锚定到执行序列里"最近的前一个/后一个主链事件"的横坐标中点，避免邻接也是
-      // Value（value→value 连续段）时取不到锚点而全都落到 x=0。
-      const idx = seqIdx.get(id);
-      let px = null, nx = null;
-      for (let i = idx - 1; i >= 0; i--) if (spineX.has(seq[i])) { px = spineX.get(seq[i]); break; }
-      for (let i = idx + 1; i < seq.length; i++) if (spineX.has(seq[i])) { nx = spineX.get(seq[i]); break; }
-      if (px != null && nx != null) {
-        // 两事件之间：放中点下方，多个值上下叠
-        p.x = (px + nx) / 2;
-        const g = gutterSlots.get(`${px}->${nx}`) || 0;
-        gutterSlots.set(`${px}->${nx}`, g + 1);
-        p.y = -(DOT_LAYOUT.gutter + g * DOT_LAYOUT.vpitch);
-      } else if (nx != null) {
-        // 前导值（首个事件之前）：水平展开成一行迎向该事件，避免全部叠在其列上（竖堆→显得和前几列重叠）
-        p.x = nx - (leadCounts.get(nx) - ((leadUsed.get(nx) || 0))) * DOT_LAYOUT.leadGap;
-        leadUsed.set(nx, (leadUsed.get(nx) || 0) + 1);
-        p.y = -DOT_LAYOUT.gutter;
-      } else if (px != null) {
-        // 后随值（末尾事件之后）：同样水平展开在事件右侧
-        p.x = px + (((trailUsed.get(px) || 0) + 1)) * DOT_LAYOUT.leadGap;
-        trailUsed.set(px, (trailUsed.get(px) || 0) + 1);
-        p.y = -DOT_LAYOUT.gutter;
-      } else {
-        p.x = 0; p.y = -DOT_LAYOUT.gutter;
+  let nextX = 0;
+  if (condSet.size > 0) {
+    const rootTargets = new Set();
+    for (const e of state.edges) if (e.label === "ROOT" && condSet.has(e.to)) rootTargets.add(e.to);
+    let rootConds = [...rootTargets];
+    if (rootConds.length === 0) rootConds = [...condSet].filter((c) => !hasParent.has(c));
+    if (rootConds.length === 0) rootConds = [...condSet];
+    const visitedCond = new Set();
+    // 紧凑树：x 由"叶子"决定(每叶一列 STEP，节点 x=子节点集的中点)，兄弟同层靠拢、跨度小。
+    let leafCounter = 0;
+    const kidsOf = (c) => { const k = subOf.get(c) || []; if (elseOf.has(c)) k.push(elseOf.get(c)); return k; };
+    const assignX = (c, depth) => {
+      if (visitedCond.has(c)) return;
+      visitedCond.add(c);
+      const kids = kidsOf(c);
+      if (kids.length === 0) {
+        const posX = leafCounter * DOT_LAYOUT.cw;
+        leafCounter++;
+        nodePos.get(c).set(posX, depth * DOT_LAYOUT.levelY, 0);
+        return posX;
+      }
+      let mn = Infinity, mx = -Infinity;
+      for (const k of kids) { const kx = assignX(k, depth + 1); if (kx < mn) mn = kx; if (kx > mx) mx = kx; }
+      const cx = (mn + mx) / 2;
+      nodePos.get(c).set(cx, depth * DOT_LAYOUT.levelY, 0);
+      return cx;
+    };
+    for (const r of rootConds) assignX(r, 0);
+    for (const c of condSet) if (!visitedCond.has(c)) { nodePos.get(c).set(leafCounter++ * DOT_LAYOUT.cw, 0, 0); }
+  }
+  // 4) 整体居中：先把条件骨架平移到原点附近；之后再按居中后的条件坐标算自由点锚点，保证坐标一致。
+  if (condSet.size > 0) {
+    let cx = 0, cy = 0;
+    for (const id of condSet) { const p = nodePos.get(id); cx += p.x; cy += p.y; }
+    cx /= condSet.size; cy /= condSet.size;
+    for (const id of condSet) { const p = nodePos.get(id); p.x -= cx; p.y -= cy; }
+  }
+  // 事件(非条件)：不固定、交给力导；按"居中后"的条件坐标给每节点一个归属条件下方的强锚点，
+  // 使其在对应决策点附近铺开、又不被邻居斥力弹飞。
+  nextAnchors.clear();
+  if (condSet.size > 0) {
+    const firstCond = seq.find(isCond);
+    const ownerSlots = new Map();
+    let last = null;
+    for (const id of seq) {
+      if (condSet.has(id)) { last = id; continue; }
+      const owner = last != null ? last : firstCond;
+      if (owner != null) {
+        const op = nodePos.get(owner);
+        const k = ownerSlots.get(owner) || 0; ownerSlots.set(owner, k + 1);
+        nextAnchors.set(id, { x: op.x + (k + 1) * DOT_LAYOUT.bx, y: op.y + DOT_LAYOUT.body });
+        const p = nodePos.get(id);
+        p.set(op.x + (k + 1) * DOT_LAYOUT.bx, op.y + DOT_LAYOUT.body, 0); // 初始即在锚点
       }
     }
-    p.z = 0;
   }
-  // 4) 整体居中：主链围绕原点
-  let cx = 0, cy = 0;
-  for (const id of ids) { cx += nodePos.get(id).x; cy += nodePos.get(id).y; }
-  cx /= ids.length; cy /= ids.length;
-  for (const id of ids) { const p = nodePos.get(id); p.x -= cx; p.y -= cy; }
-  dotNodes = incident; dotRank = rank;
+  dotNodes = condSet; dotRank.clear(); // 只固定条件骨架；其余 NEXT 节点交给力导（锚点 nextAnchors 聚拢）
   // 5) 去重叠：固定节点靠得太近时，把可动的 Value 微微推开（主链事件保持 y=0 不动）
   resolveFixedOverlaps(ids, 6);
 }
@@ -830,19 +849,20 @@ function stepLayout(dt) {
   // 力导中鼠标拖拽的节点：先快照其位置，布局计算后还原（该节点不被力导移走，其余照常动画）
   const dv0 = dragNodeId != null ? nodePos.get(dragNodeId) : null;
   _dragPin = dv0 ? dv0.clone() : null;
-  // 斥力（所有节点对；两固定单线节点彼此无作用，且固定点不被移动，只把周围力导节点推开）
+  // 斥力（自由点之间；固定骨架点不参与斥力——它们不推走自由节点，自由点才能贴紧骨架并被引力拉拢）
   for (let i = 0; i < n; i++) {
     const a = nodePos.get(nodes[i].id);
     const af = dotNodes.has(nodes[i].id);
     for (let j = i + 1; j < n; j++) {
       const b = nodePos.get(nodes[j].id);
       const bf = dotNodes.has(nodes[j].id);
-      if (af && bf) continue;
+      if (af || bf) continue; // 任一端是固定骨架点 → 不斥力
       const dx = b.x - a.x, dy = b.y - a.y, dz = b.z - a.z;
       let dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
       if (dist < 1e-6) { if (!af) a.x += (Math.random() - 0.5) * 0.01; if (!bf) b.x += (Math.random() - 0.5) * 0.01; dist = 1e-6; }
       const d = Math.max(dist, LAYOUT.minDist);
-      const f = (k * LAYOUT.repulsion) / (d * d);
+      const rep = dotLayoutOn ? DOT_LAYOUT.repFrac : 1; // 骨架模式把自由点间斥力调小，避免其被彼此炸远
+      const f = (k * LAYOUT.repulsion * rep) / (d * d);
       const fx = (f * dx) / d, fy = (f * dy) / d, fz = (f * dz) / d;
       if (!af) { a.x -= fx; a.y -= fy; a.z -= fz; }
       if (!bf) { b.x += fx; b.y += fy; b.z += fz; }
@@ -859,11 +879,23 @@ function stepLayout(dt) {
     const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
     if (dist < 1e-6) continue;
     const target = e.label === "REFERENCES" ? LAYOUT.refTarget : LAYOUT.target;
-    const fx = ((dist - target) / dist) * dx * k * LAYOUT.spring;
-    const fy = ((dist - target) / dist) * dy * k * LAYOUT.spring;
-    const fz = ((dist - target) / dist) * dz * k * LAYOUT.spring;
+    // 仅骨架模式对 NEXT 边用强弹簧；默认全量力导则所有边用统一弹簧。
+    const s = (dotLayoutOn && e.label === "NEXT") ? LAYOUT.spring * DOT_LAYOUT.nextSpring : LAYOUT.spring;
+    const fx = ((dist - target) / dist) * dx * k * s;
+    const fy = ((dist - target) / dist) * dy * k * s;
+    const fz = ((dist - target) / dist) * dz * k * s;
     if (!af) { a.x += fx; a.y += fy; a.z += fz; }
     if (!bf) { b.x -= fx; b.y -= fy; b.z -= fz; }
+  }
+  // 锚点力：NEXT 非骨架节点(调用/Value)在条件骨架框架内力导聚拢到各自归属条件
+  if (dotLayoutOn && nextAnchors.size) {
+    const kk = Math.min(dt / 16.666, 2) * LAYOUT.temperature;
+    for (const [id, a] of nextAnchors) {
+      const v = nodePos.get(id);
+      if (!v) continue;
+      v.x += (a.x - v.x) * kk * DOT_LAYOUT.anchor;
+      v.y += (a.y - v.y) * kk * DOT_LAYOUT.anchor;
+    }
   }
   // 居中（拉向当前质心防漂移；固定单线节点保持单线布局位置，不参与居中）
   let cx = 0, cy = 0, cz = 0, cnt = 0;
@@ -871,6 +903,7 @@ function stepLayout(dt) {
   cx /= cnt; cy /= cnt; cz /= cnt;
   for (const nd of nodes) {
     if (dotNodes.has(nd.id)) continue;
+    if (nextAnchors.has(nd.id)) continue; // 有独立体槽锚点，交给锚点力，不被居中拽走
     const v = nodePos.get(nd.id);
     if (!v) continue;
     v.x -= cx * k * LAYOUT.center;
@@ -878,6 +911,38 @@ function stepLayout(dt) {
     v.z -= cz * k * LAYOUT.center;
   }
   if (layoutMode === "2d") for (const v of nodePos.values()) v.z = 0;
+  // 布局遥测：每 ~2s 报"自由点到最近条件节点"的距离分布与坐标样本，供外部读日志定向调参
+  if (nextAnchors.size && (++_layoutTelemetry % 120) === 1) {
+    const conds = [];
+    for (const id of dotNodes) { const v = nodePos.get(id); if (v) conds.push(v); }
+    let n = 0, sum = 0, maxD = 0, near = 0, spr = "";
+    for (const [id] of nextAnchors) {
+      const v = nodePos.get(id); if (!v) continue;
+      let best = Infinity;
+      for (const cv of conds) { const dd = Math.hypot(v.x - cv.x, v.y - cv.y); if (dd < best) best = dd; }
+      n++; sum += best; if (best > maxD) maxD = best;
+      if (best < 60) near++;
+    }
+    let s3 = "";
+    let i3 = 0;
+    for (const [id] of nextAnchors) {
+      if (i3++ >= 3) break;
+      const v = nodePos.get(id); if (!v) continue;
+      s3 += ` [${v.x.toFixed(0)},${v.y.toFixed(0)}]`;
+    }
+    let cl = "";
+    let ci3 = 0;
+    for (const id of dotNodes) { const v = nodePos.get(id); if (v) { cl += ` c[${v.x.toFixed(0)},${v.y.toFixed(0)}]`; if (++ci3 >= 4) break; } }
+    // 报第一个自由点自身的锚点坐标与归属条件坐标
+    let anc = "";
+    if (nextAnchors.size) {
+      const fid = nextAnchors.keys().next().value;
+      const a = nextAnchors.get(fid);
+      const v = nodePos.get(fid);
+      anc = ` anchor1=[${a.x.toFixed(0)},${a.y.toFixed(0)}] at=[${v ? v.x.toFixed(0) : "?"},${v ? v.y.toFixed(0) : "?"}]`;
+    }
+    console.log(`[DBG][LAYOUT] free=${n} avgNC=${(sum / n).toFixed(1)} max=${maxD.toFixed(1)} in60=${near}${cl}${anc} sample${s3}`);
+  }
   // 力导中被拖拽的节点：位置由鼠标决定，布局计算后强制还原，不被力导移走；其余节点照常动画
   if (dragNodeId != null) {
     const dv = nodePos.get(dragNodeId);
@@ -1570,6 +1635,7 @@ function clearGraph() {
   nodesById.clear();
   nodePos.clear();
   dotNodes = new Set();
+  nextAnchors = new Map();
   edgeMesh = null;
   edgeGeo = null;
   edgeData = [];
