@@ -1677,6 +1677,21 @@ function renderGraph(data, seedId) {
   // 流色按"图"恢复/清空：同图重渲染恢复着色，换新图（节点集合变化）则清空，防止残留上一张图的颜色
   applyFlowForGraph();
   applyHighlights();
+  applyDepthMode(); // 按 2D/3D 设深度遮挡：3D 用真实 z 遮挡，2D 靠绘制序
+}
+
+/** 深度遮挡模式：3D 启真实深度(近节点挡远节点/其后边)，2D 保持 transparent+depthTest:false 靠 renderOrder。 */
+function applyDepthMode() {
+  const d3 = layoutMode === "3d";
+  if (nodeMesh && nodeMesh.material) {
+    nodeMesh.material.depthTest = d3;
+    nodeMesh.material.depthWrite = d3;
+    nodeMesh.material.needsUpdate = true;
+  }
+  if (edgeMesh && edgeMesh.material) {
+    edgeMesh.material.depthTest = d3; // 边真实深度：被前面节点(写深度)正确地挡住
+    edgeMesh.material.needsUpdate = true;
+  }
 }
 
 /** 展示非图结构（纯标量）的查询结果行。 */
@@ -2095,6 +2110,7 @@ modeBtn.addEventListener("click", () => {
     viewTarget.set(controls.target.x, controls.target.y, 0);
     for (const v of nodePos.values()) v.z = 0;
   }
+  applyDepthMode(); // 切换 2D/3D 时更新深度遮挡
   applyHighlights();
 });
 
