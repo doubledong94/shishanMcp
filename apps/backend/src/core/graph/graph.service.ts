@@ -377,9 +377,10 @@ export class GraphService {
     const cypher = `MATCH (n) WHERE id(n) = $identity RETURN n LIMIT 1`;
     const records = (await this.neo4j.run(cypher, { identity }, "read")) as Array<{ get: (k: string) => any }>;
     const rec = records[0];
-    if (!rec) return null;
+    // 查不到(如索引重建后旧 identity 失效)返回明确的 JSON 对象而非空体/null，避免前端 json() 崩。
+    if (!rec) return { project, id: `node-${identity}`, found: false };
     const n = rec.get("n");
-    if (!n || typeof n !== "object") return null;
+    if (!n || typeof n !== "object") return { project, id: `node-${identity}`, found: false };
     const props = n.properties || {};
     const labels = n.labels || [];
     const file = String(props.file ?? props.filePath ?? "");
