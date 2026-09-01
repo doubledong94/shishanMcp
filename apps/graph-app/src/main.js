@@ -1,5 +1,5 @@
 import * as THREE from "three";
-import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+import { ThreeDControls } from "./ThreeDControls.js"; // 忠实移植旧项目自定义三维相机控制
 import { createTweenEngine, sineInOut } from "./anim.js";
 
 // 构建时间：由 vite.config 在构建时注入，随每次构建自动更新（不再手写固定值）
@@ -1110,7 +1110,8 @@ function pickNode(clientX, clientY) {
 }
 
 const drag = { active: false, button: -1, startX: 0, startY: 0, lastX: 0, lastY: 0, moved: false };
-let dragNodeId = null; // 力导中鼠标拖拽的节点 id（2D，命中节点时置位）
+let dragNodeId = null; // 力导中鼠标拖拽的节点 id（2D/3D，命中节点时置位）
+let _drag3d = null; // 3D 拖拽平面：{dir, d}（垂直于相机、过节点起始位置）
 let _dragPin = null;   // stepLayout 中被拖节点的鼠标位快照（力导后还原）
 // 双击态机：同一节点 500ms 内两次单击 = 双击聚焦（复刻旧项目 DoubleClickStateMachine，
 // 避免与「单击切换选中」冲突：第二次单击不再切换，而是选中+聚焦）。
@@ -1260,10 +1261,36 @@ function setupInteraction() {
       // 命中节点 → 进入"节点拖拽"（该节点位置跟鼠标走，力导仍跑）；未命中 → 视图平移
       dragNodeId = e.button === 0 ? pickNode(e.clientX, e.clientY) : null;
       el.setPointerCapture(e.pointerId);
+    } else if (layoutMode === "3d" && e.button === 0) {
+      // 3D 拖节点（对齐旧项目）：命中节点则建立"过节点、垂直于相机"的平面，拖拽期间暂停相机
+      const id = pickNode(e.clientX, e.clientY);
+      if (id != null) {
+        dragNodeId = id;
+        controls.enabled = false;
+        const p = nodePos.get(id);
+        _drag3d = { dir: new THREE.Vector3(), d: 0 };
+        perspCamera.getWorldDirection(_drag3d.dir);
+        _drag3d.d = -_drag3d.dir.dot(p);
+        el.setPointerCapture(e.pointerId);
+      }
     }
   });
 
   el.addEventListener("pointermove", (e) => {
+    // 3D 拖节点：鼠标 ray 与"过节点、垂直于相机"的平面求交，把节点移到交点（旧项目同款）
+    if (layoutMode === "3d" && dragNodeId != null && _drag3d) {
+      const rect = renderer.domElement.getBoundingClientRect();
+      pointer.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+      pointer.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+      raycaster.setFromCamera(pointer, camera);
+      const denom = _drag3d.dir.dot(raycaster.ray.direction);
+      if (Math.abs(denom) > 1e-6) {
+        const t = -(_drag3d.dir.dot(raycaster.ray.origin) + _drag3d.d) / denom;
+        const hit = raycaster.ray.origin.clone().add(raycaster.ray.direction.clone().multiplyScalar(t));
+        nodePos.get(dragNodeId).copy(hit);
+      }
+      return;
+    }
     // 节点拖拽：被拖节点位置跟鼠标走（正交 2D：世界增量 = 屏幕增量 × 世界每像素；屏幕下=世界下）
     if (layoutMode === "2d" && dragNodeId != null) {
       const s = viewHeight / renderer.domElement.clientHeight;
@@ -1286,7 +1313,8 @@ function setupInteraction() {
       if (Math.abs(e.clientX - drag.startX) + Math.abs(e.clientY - drag.startY) > 3) drag.moved = true;
       hideTooltip();
       if (drag.button === 0 || drag.button === 2) {
-        // 平移（正交 2D）：屏幕增量 → 世界增量（屏幕 y 向下=+、世界 y 向上=+，故 y 取反；再按 roll 旋转）
+        // 平移（左/右键都平移，对齐旧项目；PointerEvent button: 0左 1中 2右）
+        // 屏幕增量 → 世界增量（屏幕 y 向下=+、世界 y 向上=+，故 y 取反；再按 roll 旋转）
         const worldPerPx = viewHeight / renderer.domElement.clientHeight;
         const wx = dx * Math.cos(viewRotZ) - dy * Math.sin(viewRotZ);
         const wy = dx * Math.sin(viewRotZ) + dy * Math.cos(viewRotZ);
@@ -1294,6 +1322,7 @@ function setupInteraction() {
         viewTarget.y += wy * worldPerPx;
         if (layoutMode === "2d") viewTarget.z = 0;
       } else if (drag.button === 1) {
+        // 绕 Z 旋转（中键，对齐旧项目）
         viewRotZ += dx * 0.005;
       }
       return;
@@ -1309,7 +1338,8 @@ function setupInteraction() {
   });
 
   const endPointer = (e) => {
-    // 2D 拖拽（节点拖拽 / 平移旋转）收尾
+    // 2D 拖拽（节点拖拽 / 平移旋转）收尾 + 3D 节点拖拽收尾（恢复相机）
+    if (layoutMode === "3d" && dragNodeId != null) { _drag3d = null; controls.enabled = true; }
     dragNodeId = null;
     if (layoutMode === "2d" && drag.active) {
       drag.active = false;
@@ -1581,8 +1611,7 @@ function initThree() {
   renderer.setPixelRatio(window.devicePixelRatio);
   app.appendChild(renderer.domElement);
 
-  controls = new OrbitControls(perspCamera, renderer.domElement);
-  controls.enableDamping = true;
+  controls = new ThreeDControls(perspCamera, renderer.domElement);
   controls.enabled = false; // 默认 2D
 
   graphGroup = new THREE.Group();
