@@ -976,10 +976,17 @@ function updateScaleByDistance() {
 }
 
 function updateLabelPositions() {
+  // 3D 下标签沿相机方向前移一点，behind 自己的节点不被挡住(但仍会被更近的其它节点遮挡)
+  let dir = null;
+  if (layoutMode === "3d" && camera) {
+    dir = new THREE.Vector3();
+    camera.getWorldDirection(dir); // 相机朝向；标签前端 = 背离相机即沿 -dir
+  }
   for (const [id, lab] of nodeLabels) {
     const v = nodePos.get(id);
     if (!v) continue;
-    lab.position.copy(v); // 标签中心与节点中心对齐
+    lab.position.copy(v);
+    if (dir) lab.position.addScaledVector(dir, -0.6); // 朝相机推 0.6，略在节点之前
   }
 }
 
@@ -1680,7 +1687,7 @@ function renderGraph(data, seedId) {
   applyDepthMode(); // 按 2D/3D 设深度遮挡：3D 用真实 z 遮挡，2D 靠绘制序
 }
 
-/** 深度遮挡模式：3D 启真实深度(近节点挡远节点/其后边)，2D 保持 transparent+depthTest:false 靠 renderOrder。 */
+/** 深度遮挡模式：3D 启真实深度(节点/边/标签都按 z 遮挡)，2D 保持 transparent+depthTest:false 靠 renderOrder。 */
 function applyDepthMode() {
   const d3 = layoutMode === "3d";
   if (nodeMesh && nodeMesh.material) {
@@ -1689,8 +1696,12 @@ function applyDepthMode() {
     nodeMesh.material.needsUpdate = true;
   }
   if (edgeMesh && edgeMesh.material) {
-    edgeMesh.material.depthTest = d3; // 边真实深度：被前面节点(写深度)正确地挡住
+    edgeMesh.material.depthTest = d3; // 边真实深度：被前面节点正确地挡住
+    edgeMesh.material.depthWrite = d3; // 边也写深度：在前的边能挡住后面的节点
     edgeMesh.material.needsUpdate = true;
+  }
+  for (const [, lab] of nodeLabels) { // 标签：3D 也被近节点遮挡(不再恒置顶)
+    if (lab.material) lab.material.depthTest = d3;
   }
 }
 
