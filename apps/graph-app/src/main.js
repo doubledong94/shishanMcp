@@ -1313,13 +1313,15 @@ function setupInteraction() {
       if (Math.abs(e.clientX - drag.startX) + Math.abs(e.clientY - drag.startY) > 3) drag.moved = true;
       hideTooltip();
       if (drag.button === 0 || drag.button === 2) {
-        // 平移（左/右键都平移，对齐旧项目；PointerEvent button: 0左 1中 2右）
-        // 屏幕增量 → 世界增量（屏幕 y 向下=+、世界 y 向上=+，故 y 取反；再按 roll 旋转）
+        // 平移（左/右键都平移，对齐旧项目；PointerEvent button: 0左 1中 2右）。
+        // 用相机真实世界轴(right/up)平移：内容跟随光标。取 orthoCamera.matrixWorld 的 X/Y 列，
+        // 与 rotateZ(viewRotZ) 的滚转严格一致，避免中键旋转后再拖方向不一致。
+        const e = orthoCamera.matrixWorld.elements;
+        const rx = e[0], ry = e[1]; // right (X) 世界 xy
+        const ux = e[4], uy = e[5]; // up   (Y) 世界 xy
         const worldPerPx = viewHeight / renderer.domElement.clientHeight;
-        const wx = dx * Math.cos(viewRotZ) - dy * Math.sin(viewRotZ);
-        const wy = dx * Math.sin(viewRotZ) + dy * Math.cos(viewRotZ);
-        viewTarget.x -= wx * worldPerPx;
-        viewTarget.y += wy * worldPerPx;
+        viewTarget.x += (-rx * dx + ux * dy) * worldPerPx;
+        viewTarget.y += (-ry * dx + uy * dy) * worldPerPx;
         if (layoutMode === "2d") viewTarget.z = 0;
       } else if (drag.button === 1) {
         // 绕 Z 旋转（中键，对齐旧项目）
