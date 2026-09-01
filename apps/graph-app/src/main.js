@@ -466,6 +466,7 @@ function makeLabel(text) {
 // 对齐旧项目：边 transparent+depthTest=false，与节点同处透明 pass，节点 renderOrder=1 更后画 → 圆盘盖住边。
 const EDGE_CAP = 20000; // 预分配容量（对齐旧 FlowLine::edgeCapacity）
 const EDGE_HALF_WIDTH = 0.7; // 每侧半宽；总宽 ≈ 2*half（比原值减半）
+const EDGE_INSET = 0.9; // 边端点按节点半径内缩的比例(≈圆盘边缘，避免伸进中心 z-fighting)
 
 const EDGE_VERT = `
 attribute vec3 edgePos;
@@ -574,13 +575,20 @@ function updateEdgeBuffers() {
     const a = nodePos.get(e.from), b = nodePos.get(e.to);
     const o = i * 4;
     if (!a || !b) continue;
-    // 位置：顶点0,3=起点 a；顶点1,2=终点 b
-    ePosArr[(o + 0) * 3] = a.x; ePosArr[(o + 0) * 3 + 1] = a.y; ePosArr[(o + 0) * 3 + 2] = a.z;
-    ePosArr[(o + 1) * 3] = b.x; ePosArr[(o + 1) * 3 + 1] = b.y; ePosArr[(o + 1) * 3 + 2] = b.z;
-    ePosArr[(o + 2) * 3] = b.x; ePosArr[(o + 2) * 3 + 1] = b.y; ePosArr[(o + 2) * 3 + 2] = b.z;
-    ePosArr[(o + 3) * 3] = a.x; ePosArr[(o + 3) * 3 + 1] = a.y; ePosArr[(o + 3) * 3 + 2] = a.z;
-    // 方向：起点→终点（顶点0,1），终点→起点（顶点2,3）；着色器里 normalize 后只取朝向，长度无关
+    // 位置：顶点0,3=起点 a；顶点1,2=终点 b。边端点按各自节点半径内缩到圆盘边缘，
+    // 避免伸进节点中心与节点盘在同一深度 z-fighting(3D 真实深度下中心闪)。
     const dx = b.x - a.x, dy = b.y - a.y, dz = b.z - a.z;
+    const len = Math.hypot(dx, dy, dz) || 1e-6;
+    const ux = dx / len, uy = dy / len, uz = dz / len;
+    const ra = (nodeScale.get(e.from) || 1) * EDGE_INSET;
+    const rb = (nodeScale.get(e.to) || 1) * EDGE_INSET;
+    const aax = a.x + ux * ra, aay = a.y + uy * ra, aaz = a.z + uz * ra;
+    const bbx = b.x - ux * rb, bby = b.y - uy * rb, bbz = b.z - uz * rb;
+    ePosArr[(o + 0) * 3] = aax; ePosArr[(o + 0) * 3 + 1] = aay; ePosArr[(o + 0) * 3 + 2] = aaz;
+    ePosArr[(o + 1) * 3] = bbx; ePosArr[(o + 1) * 3 + 1] = bby; ePosArr[(o + 1) * 3 + 2] = bbz;
+    ePosArr[(o + 2) * 3] = bbx; ePosArr[(o + 2) * 3 + 1] = bby; ePosArr[(o + 2) * 3 + 2] = bbz;
+    ePosArr[(o + 3) * 3] = aax; ePosArr[(o + 3) * 3 + 1] = aay; ePosArr[(o + 3) * 3 + 2] = aaz;
+    // 方向：起点→终点（顶点0,1），终点→起点（顶点2,3）；着色器里 normalize 后只取朝向，长度无关
     eDirArr[(o + 0) * 3] = dx; eDirArr[(o + 0) * 3 + 1] = dy; eDirArr[(o + 0) * 3 + 2] = dz;
     eDirArr[(o + 1) * 3] = dx; eDirArr[(o + 1) * 3 + 1] = dy; eDirArr[(o + 1) * 3 + 2] = dz;
     eDirArr[(o + 2) * 3] = -dx; eDirArr[(o + 2) * 3 + 1] = -dy; eDirArr[(o + 2) * 3 + 2] = -dz;
