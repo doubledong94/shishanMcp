@@ -330,52 +330,61 @@ function applyFlowForGraph() {
 const _FLOW_WHITE = new THREE.Color(1, 1, 1);
 
 /**
- * 用 Kahn 拓扑剥层给每个节点算流位置 ratio = fromTop/(fromTop+toBottom)。
- * fromTop = 从源头沿出边剥到的层号，toBottom = 从汇沿入边反向剥到的层号。
- * 与旧项目一致：源头发黄、汇发洋红；孤立节点取中间。
+ * 用最短路程给每个节点算流位置 ratio = fromTop/(fromTop+toBottom)，对齐旧项目 igraph 实现：
+ * fromTop = max over 各源(入度0) 的"源→节点最短路径边数"，toBottom = max over 各汇(出度0) 的"节点→汇最短路径边数"。
+ * 规则同旧 getNodeRelativePosition()：从任何源都不可达(孤立/纯环)→0(黄)；到不了任何汇→1(洋红)；length==0→0。
  */
 function computeFlowColors() {
   flowColorRatio.clear();
   const ids = state.nodes.map((n) => n.id);
   const nodeSet = new Set(ids);
   if (!ids.length) return;
-  const out = new Map(), incnt = new Map();
-  for (const id of ids) { out.set(id, []); incnt.set(id, 0); }
+  const out = new Map(), inc = new Map();
+  for (const id of ids) { out.set(id, []); inc.set(id, []); }
   for (const e of state.edges) {
-    if (nodeSet.has(e.from) && nodeSet.has(e.to)) { out.get(e.from).push(e.to); incnt.set(e.to, incnt.get(e.to) + 1); }
+    if (nodeSet.has(e.from) && nodeSet.has(e.to)) {
+      out.get(e.from).push(e.to);
+      inc.get(e.to).push(e.from);
+    }
   }
-  const layerFrom = peelLayers(ids, incnt, out);
-  // 反向：把边倒过来剥一层，得到"离汇多远"
-  const revOut = new Map(), revInc = new Map();
-  for (const id of ids) { revOut.set(id, []); revInc.set(id, 0); }
-  for (const e of state.edges) {
-    if (nodeSet.has(e.from) && nodeSet.has(e.to)) { revOut.get(e.to).push(e.from); revInc.set(e.from, revInc.get(e.from) + 1); }
-  }
-  const layerTo = peelLayers(ids, revInc, revOut);
+  // 入度 0 = 源（旧 prepareInDegreeMap），出度 0 = 汇；seed 顺序与显示顺序一致，保证稳定。
+  const sources = ids.filter((id) => inc.get(id).length === 0);
+  const sinks = ids.filter((id) => out.get(id).length === 0);
+  const distTop = farthestShortest(out, sources);   // 离"最近源"的路程（不可达则无记录）
+  const distBottom = farthestShortest(inc, sinks);  // 反向算：离"最近汇"的路程
   for (const id of ids) {
-    const fromTop = layerFrom.get(id) ?? 0;
-    const toBottom = layerTo.get(id) ?? 0;
-    const ratio = fromTop + toBottom === 0 ? 0.5 : fromTop / (fromTop + toBottom);
-    flowColorRatio.set(id, THREE.MathUtils.clamp(ratio, 0, 1));
+    const fromTop = distTop.get(id) ?? -1;
+    const toBottom = distBottom.get(id) ?? -1;
+    let ratio;
+    if (fromTop < 0) ratio = 0;
+    else if (toBottom < 0) ratio = 1;
+    else { const len = fromTop + toBottom; ratio = len === 0 ? 0 : fromTop / len; }
+    flowColorRatio.set(id, ratio);
   }
 }
 
-/** 拓扑剥层：入度为 0 的节点剥出为第 0 层，逐层递增；环内节点无记录（默认 0）。 */
-function peelLayers(ids, inCountRef, outRef) {
-  const incnt = new Map(inCountRef);
-  const depth = new Map();
-  const q = [];
-  for (const id of ids) if (incnt.get(id) === 0) { q.push(id); depth.set(id, 0); }
-  let qi = 0;
-  while (qi < q.length) {
-    const cur = q[qi++];
-    for (const nb of outRef.get(cur)) {
-      const nu = incnt.get(nb) - 1;
-      incnt.set(nb, nu);
-      if (nu === 0) { depth.set(nb, depth.get(cur) + 1); q.push(nb); }
+/** 多源 BFS（单位边权 = 最短路径边数）：从每个 seed 各跑一次取逐节点 max，对齐旧 maxDistanceFromTop/ToBottom。 */
+function farthestShortest(adj, seeds) {
+  const dist = new Map();
+  for (const s of seeds) {
+    const seen = new Map([[s, 0]]);
+    let frontier = [s];
+    while (frontier.length) {
+      const next = [];
+      for (const u of frontier) {
+        const du = seen.get(u) + 1;
+        for (const v of adj.get(u)) {
+          if (!seen.has(v)) { seen.set(v, du); next.push(v); }
+        }
+      }
+      frontier = next;
+    }
+    for (const [v, d] of seen) {
+      const cur = dist.get(v);
+      if (cur === undefined || d > cur) dist.set(v, d);
     }
   }
-  return depth;
+  return dist;
 }
 
 function enableFlowColor() {
