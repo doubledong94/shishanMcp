@@ -42,9 +42,13 @@ export class ThreeDControls {
     this.dollyEnd = new THREE.Vector2();
     this.dollyDelta = new THREE.Vector2();
 
-    this._onPointerDown = (e) => this._mouseDown(e);
-    this._onPointerMove = (e) => this._mouseMove(e);
-    this._onPointerUp = (e) => this._mouseUp(e);
+    // 触屏多指跟踪：pointerId -> 最近位置(dom 坐标)。单指=旋转，双指=捏合缩放。
+    this._pointers = new Map();
+    this.pinchDist = 0; // 两指上一次距离
+
+    this._onPointerDown = (e) => this._pointerDown(e);
+    this._onPointerMove = (e) => this._pointerMove(e);
+    this._onPointerUp = (e) => this._pointerUp(e);
     this._onWheel = (e) => this._mouseWheel(e);
     this._onKeyDown = (e) => this._keyDown(e);
     domElement.addEventListener("pointerdown", this._onPointerDown);
@@ -63,6 +67,9 @@ export class ThreeDControls {
     el.removeEventListener("pointerup", this._onPointerUp);
     el.removeEventListener("wheel", this._onWheel);
     window.removeEventListener("keydown", this._onKeyDown);
+    this._pointers.clear();
+    this.dragging = false;
+    this.state = State.NONE;
   }
 
   getZoomScale() { return Math.pow(0.95, this.zoomSpeed); }
@@ -78,6 +85,90 @@ export class ThreeDControls {
     if (b === 1) return 2;       // MIDDLE -> ROTATEZ
     if (b === 2) return 1;       // RIGHT  -> PAN
     return -1;
+  }
+
+  // ---------- 触屏多指（单指旋转 / 双指捏合缩放） ----------
+  _pointerDown(e) {
+    if (!this.enabled) return;
+    const pos = this._posOf(e);
+    if (e.pointerType === "touch") {
+      this._pointers.set(e.pointerId, pos.clone());
+      try { this.domElement.setPointerCapture(e.pointerId); } catch { /* ignore */ }
+      if (this._pointers.size === 1) {
+        if (this.enableRotate) { this._downRotate(pos); this.state = State.ROTATE; this.dragging = true; }
+      } else if (this._pointers.size === 2) {
+        // 双指 → 捏合缩放。清掉单指旋转累积，避免切手势时跳变。
+        this.state = this.enableZoom ? State.DOLLY : State.NONE;
+        this.dragging = this.state !== State.NONE;
+        this.rotateDelta.set(0, 0);
+        this.rotateZDelta.set(0, 0);
+        this._resetPinch();
+      }
+      return;
+    }
+    this._mouseDown(e);
+  }
+
+  _pointerMove(e) {
+    if (!this.enabled) return;
+    const pos = this._posOf(e);
+    if (e.pointerType === "touch") {
+      if (!this._pointers.has(e.pointerId)) return;
+      this._pointers.set(e.pointerId, pos.clone());
+      if (this._pointers.size >= 2) {
+        if (this.state === State.DOLLY) this._pinch();
+      } else if (this.state === State.ROTATE) {
+        this._moveRotate(pos);
+      }
+      return;
+    }
+    this._mouseMove(e);
+  }
+
+  _pointerUp(e) {
+    if (e.pointerType === "touch") {
+      this._pointers.delete(e.pointerId);
+      if (this._pointers.size === 0) {
+        this.state = State.NONE;
+        this.dragging = false;
+      } else if (this._pointers.size === 1) {
+        // 抬到只剩一指 → 恢复单指旋转（起点取该指当前位置）
+        const left = this._pointers.entries().next().value;
+        if (left) this._downRotate(left[1]);
+        this._resetPinch();
+        this.state = this.enableRotate ? State.ROTATE : State.NONE;
+        this.dragging = this.state !== State.NONE;
+      }
+      return;
+    }
+    this._mouseUp(e);
+  }
+
+  _twoFingerDistance() {
+    const pts = [...this._pointers.values()];
+    if (pts.length < 2) return 0;
+    return pts[0].distanceTo(pts[1]);
+  }
+
+  _resetPinch() { this.pinchDist = this._twoFingerDistance(); }
+
+  _pinch() {
+    const d = this._twoFingerDistance();
+    if (d <= 0) return;
+    if (this.pinchDist <= 0) { this.pinchDist = d; return; }
+    const ratio = d / this.pinchDist; // >1 = 双指张开(放大)，<1 = 并拢(缩小)
+    if (ratio !== 1) this._dollyBy(ratio);
+    this.pinchDist = d;
+    if (!this.enableDamping) this.update();
+  }
+
+  _dollyBy(ratio) {
+    if (this.camera.isPerspectiveCamera) {
+      this.scale /= ratio; // ratio>1 → 相机靠近 → 放大；<1 → 远离 → 缩小
+    } else if (this.camera.isOrthographicCamera) {
+      this.camera.zoom = Math.max(this.minZoom, Math.min(this.maxZoom, this.camera.zoom * ratio));
+      this.camera.updateProjectionMatrix();
+    }
   }
 
   _mouseDown(e) {

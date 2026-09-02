@@ -1255,8 +1255,86 @@ function handleNodeClick(id, e) {
 function setupInteraction() {
   const el = renderer.domElement;
 
+  // 触屏：双保险阻止浏览器默认手势——CSS touch-action:none 兜底 + 此处 preventDefault
+  // （防止旧 iOS 在 touch-action 未生效时仍滚动/缩放页面，从而抛 pointercancel 中断交互）。
+  for (const t of ["touchstart", "touchmove"]) {
+    el.addEventListener(t, (e) => e.preventDefault(), { passive: false });
+  }
+  // 触屏多指跟踪：pointerId -> {x, y}。单指=2D 平移/拖节点，双指=捏合缩放；3D 单指旋转交给 ThreeDControls。
+  const touchPoints = new Map();
+  let pinchActive = false;
+  let pinchDist = 0;
+  // 触屏悬停/长按：按下即“悬停”高亮+tooltip，抬起取消；长按节点弹出右键菜单（统一移动端，含不支持
+  // contextmenu 事件的 iOS）。移动/抬手/变双指会取消长按。
+  const LONG_PRESS_MS = 500;
+  let pressTimer = null;
+  let pressActive = false;   // 单指按压进行中（用于长按判定与原生 contextmenu guard）
+  let pressPos = { x: 0, y: 0 };
+  let longPressFired = false; // 本次按压是否已长按出菜单（抬手时不再当 tap 选中）
+  function setHoverAt(x, y) {
+    const id = pickNode(x, y);
+    if (id !== hoverId) { hoverId = id; applyHighlights(); }
+    if (id) showTooltipAt(x, y, nodeInfoHtml(id));
+    else hideTooltip();
+  }
+  function clearHoverAt() {
+    if (hoverId != null) { hoverId = null; applyHighlights(); }
+    hideTooltip();
+  }
+
   const downAt = { x: 0, y: 0, button: -1, active: false };
   el.addEventListener("pointerdown", (e) => {
+    if (e.pointerType === "touch") {
+      try { el.setPointerCapture(e.pointerId); } catch { /* ignore */ }
+      touchPoints.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      if (touchPoints.size === 1) {
+        downAt.x = e.clientX;
+        downAt.y = e.clientY;
+        downAt.button = 0;
+        downAt.active = true;
+        // touch：按下即“悬停”高亮 + tooltip
+        setHoverAt(e.clientX, e.clientY);
+        // 长按节点 → 右键菜单；移动/抬手/变双指会取消
+        pressPos.x = e.clientX;
+        pressPos.y = e.clientY;
+        pressActive = true;
+        longPressFired = false;
+        clearTimeout(pressTimer);
+        pressTimer = setTimeout(() => {
+          if (!pressActive) return;
+          const id = pickNode(pressPos.x, pressPos.y);
+          if (id != null) {
+            longPressFired = true;
+            hideTooltip(); // 菜单弹出，收掉 tooltip（保留节点高亮，标识菜单对象）
+            openContextMenu(pressPos.x, pressPos.y, id);
+          }
+        }, LONG_PRESS_MS);
+        if (layoutMode === "2d") {
+          drag.active = true;
+          drag.button = 0;
+          drag.startX = drag.lastX = e.clientX;
+          drag.startY = drag.lastY = e.clientY;
+          drag.moved = false;
+          dragNodeId = pickNode(e.clientX, e.clientY); // 命中节点→拖节点；未命中→平移
+        }
+        // 3D：单指旋转交给 controls，这里只记录 downAt 供抬手择点
+      } else if (touchPoints.size === 2) {
+        // 双指→捏合缩放：停掉长按/单手拖拽/节点拖拽，避免手指漂移造成平移跳变；3D 恢复相机
+        clearTimeout(pressTimer); pressActive = false;
+        pinchActive = true;
+        const p = [...touchPoints.values()];
+        pinchDist = Math.hypot(p[0].x - p[1].x, p[0].y - p[1].y);
+        drag.active = false;
+        dragNodeId = null;
+        _drag3d = null;
+        controls.enabled = true;
+        downAt.active = false;
+        clearHoverAt();
+      }
+      return;
+    }
+
+    // ---------- 鼠标 / 触控笔：原逻辑 ----------
     downAt.x = e.clientX;
     downAt.y = e.clientY;
     downAt.button = e.button;
@@ -1286,6 +1364,36 @@ function setupInteraction() {
   });
 
   el.addEventListener("pointermove", (e) => {
+    const isTouch = e.pointerType === "touch";
+    if (isTouch && touchPoints.has(e.pointerId)) touchPoints.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    // 手指移动超过阈值 → 视为拖动，取消长按
+    if (isTouch && pressActive && Math.hypot(e.clientX - pressPos.x, e.clientY - pressPos.y) > 8) {
+      clearTimeout(pressTimer);
+      pressActive = false;
+    }
+    // 触摸按压期间保持 hover：移动只让 tooltip 跟随手指（内容=按下时的节点），抬起才清除。
+    // 这里绝不 hideTooltip/清 hoverId——否则"手指一动 hover 就没了"，与 up 才取消的语义相反。
+    if (isTouch && touchPoints.size === 1 && hoverId != null) {
+      showTooltipAt(e.clientX, e.clientY, nodeInfoHtml(hoverId));
+    }
+
+    // 触屏双指捏合缩放：2D 调 viewHeight；3D 由 ThreeDControls 内部处理，这里不干预
+    if (isTouch && touchPoints.size >= 2 && pinchActive) {
+      const p = [...touchPoints.values()];
+      const d = Math.hypot(p[0].x - p[1].x, p[0].y - p[1].y);
+      if (pinchDist > 0 && layoutMode === "2d") {
+        const ratio = d / pinchDist;
+        viewHeight = THREE.MathUtils.clamp(viewHeight / ratio, ZOOM_H_MIN, ZOOM_H_MAX);
+      }
+      pinchDist = d;
+      hideTooltip();
+      return;
+    }
+    // 触屏 3D 单指：旋转/缩放交给 controls；tooltip 已在上面跟随手指，不隐藏
+    if (isTouch && layoutMode === "3d") {
+      return;
+    }
+    // 触屏 2D 单指：drag.* 已由 pointerdown 置好，走下方同一套平移/拖节点逻辑
     // 3D 拖节点：鼠标 ray 与"过节点、垂直于相机"的平面求交，把节点移到交点（旧项目同款）
     if (layoutMode === "3d" && dragNodeId != null && _drag3d) {
       const rect = renderer.domElement.getBoundingClientRect();
@@ -1317,7 +1425,7 @@ function setupInteraction() {
       drag.lastX = e.clientX;
       drag.lastY = e.clientY;
       if (Math.abs(e.clientX - drag.startX) + Math.abs(e.clientY - drag.startY) > 3) drag.moved = true;
-      hideTooltip();
+      if (!isTouch) hideTooltip(); // 触摸：拖动时也不取消 hover，tooltip 已跟随
       return;
     }
     if (layoutMode === "2d" && drag.active) {
@@ -1326,7 +1434,7 @@ function setupInteraction() {
       drag.lastX = e.clientX;
       drag.lastY = e.clientY;
       if (Math.abs(e.clientX - drag.startX) + Math.abs(e.clientY - drag.startY) > 3) drag.moved = true;
-      hideTooltip();
+      if (!isTouch) hideTooltip(); // 触摸：拖动时也不取消 hover，tooltip 已跟随
       if (drag.button === 0 || drag.button === 2) {
         // 平移（左/右键都平移，对齐旧项目；PointerEvent button: 0左 1中 2右）。
         // 用相机真实世界轴(right/up)平移：内容跟随光标。取 orthoCamera.matrixWorld 的 X/Y 列，
@@ -1355,7 +1463,33 @@ function setupInteraction() {
   });
 
   const endPointer = (e) => {
-    // 2D 拖拽（节点拖拽 / 平移旋转）收尾 + 3D 节点拖拽收尾（恢复相机）
+    const isTouch = e.pointerType === "touch";
+    if (isTouch) {
+      const wasSingle = touchPoints.size === 1;
+      touchPoints.delete(e.pointerId);
+      if (touchPoints.size < 2) pinchActive = false;
+      // 取消长按 & 悬停（抬手即取消）
+      clearTimeout(pressTimer);
+      pressActive = false;
+      clearHoverAt();
+      // 2D 单手拖拽收尾 + 3D 节点拖拽收尾（恢复相机）
+      if (layoutMode === "2d" && drag.active) drag.active = false;
+      if (layoutMode === "3d" && dragNodeId != null) { _drag3d = null; controls.enabled = true; }
+      dragNodeId = null;
+      // 抬手择点（tap）：仅当没长按出菜单、且是一次完整单指、未拖动过多
+      if (touchPoints.size === 0 && wasSingle && downAt.active && !longPressFired) {
+        downAt.active = false;
+        const moved = Math.hypot(e.clientX - downAt.x, e.clientY - downAt.y);
+        if (moved <= 10) {
+          const id = pickNode(e.clientX, e.clientY);
+          handleNodeClick(id, e); // 切换选中 / 双击聚焦 / 组合键；空点无操作
+        }
+      } else if (touchPoints.size === 0) {
+        downAt.active = false;
+      }
+      return;
+    }
+    // ---------- 鼠标 / 触控笔：原逻辑 ----------
     if (layoutMode === "3d" && dragNodeId != null) { _drag3d = null; controls.enabled = true; }
     dragNodeId = null;
     if (layoutMode === "2d" && drag.active) {
@@ -1382,9 +1516,12 @@ function setupInteraction() {
     viewHeight = THREE.MathUtils.clamp(viewHeight, ZOOM_H_MIN, ZOOM_H_MAX);
   }, { passive: false });
 
-  // 右键流光级联（shift+右键 = 反向流光，同旧项目）
+  // 右键流光级联（shift+右键 = 反向流光，同旧项目）。
+  // 触摸长按由上面的长按定时器统一处理；这里用 pressActive guard 拦截安卓 Chrome 在长按时
+  // 自己触发的 contextmenu 事件（否则会跟定时器重复弹两次菜单）。鼠标右键不设 pressActive，走原逻辑。
   el.addEventListener("contextmenu", (e) => {
     e.preventDefault();
+    if (pressActive) return;
     const id = pickNode(e.clientX, e.clientY);
     if (id) openContextMenu(e.clientX, e.clientY, id);
   });
