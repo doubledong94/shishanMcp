@@ -1291,13 +1291,19 @@ function setupInteraction() {
       }
       return;
     }
-    // 节点拖拽：被拖节点位置跟鼠标走（正交 2D：世界增量 = 屏幕增量 × 世界每像素；屏幕下=世界下）
+    // 节点拖拽：被拖节点位置跟鼠标走（正交 2D：世界增量 = 屏幕增量 × 世界每像素；用相机真实世界轴）
+    // 与视图平移方向相反：平移移动相机（-方向），节点移动跟随光标（+方向）
     if (layoutMode === "2d" && dragNodeId != null) {
-      const s = viewHeight / renderer.domElement.clientHeight;
+      const dx = e.clientX - drag.lastX;
+      const dy = e.clientY - drag.lastY;
       const v = nodePos.get(dragNodeId);
       if (v) {
-        v.x += (e.clientX - drag.lastX) * s;
-        v.y -= (e.clientY - drag.lastY) * s;
+        const me = orthoCamera.matrixWorld.elements;
+        const rx = me[0], ry = me[1]; // right (X) 世界 xy
+        const ux = me[4], uy = me[5]; // up   (Y) 世界 xy
+        const worldPerPx = viewHeight / renderer.domElement.clientHeight;
+        v.x += (rx * dx - ux * dy) * worldPerPx;
+        v.y += (ry * dx - uy * dy) * worldPerPx;
       }
       drag.lastX = e.clientX;
       drag.lastY = e.clientY;
