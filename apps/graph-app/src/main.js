@@ -1720,7 +1720,10 @@ async function viewSourceForNode(id) {
   const project = projectSel.value;
   if (!project) { errorEl.textContent = "未选项目，无法查看源码"; return; }
   setCodePanel(true);
-  const qs = new URLSearchParams({ project, id });
+  // 优先用稳定 id（= Neo4j 的 id 属性，重索引后不失效）反查源码；node-<identity> 仅供旧逻辑兼容。
+  const node = state.nodes.find((n) => n.id === id);
+  const srcId = node && node.stableId ? node.stableId : id;
+  const qs = new URLSearchParams({ project, id: srcId });
   try {
     const res = await fetch(`/api/graph/source?${qs}`);
     if (!res.ok) { const b = await res.text(); throw new Error(`${res.status}: ${b.slice(0, 160)}`); }
@@ -2064,12 +2067,16 @@ async function expand() {
   errorEl.textContent = "";
   const project = projectSel.value;
   const dir = dirSel.value;
+  // $id 匹配的是 Neo4j 的 id 属性（稳定 id）；activeId 是 node-<identity> 视图 id，需换成 stableId，
+  // 否则重索引后（甚至任何视图下）都匹配不到节点，扩展一直为空。
+  const node = state.nodes.find((n) => n.id === activeId);
+  const matchId = node && node.stableId ? node.stableId : activeId;
   const cypher =
     `MATCH (a {id:$id})-[r:${dir}]-(b {projectId:$project}) ` +
     "RETURN a, r, b LIMIT 200";
   const url =
     `/api/graph/query?project=${encodeURIComponent(project)}` +
-    `&cypher=${encodeURIComponent(cypher)}&id=${encodeURIComponent(activeId)}`;
+    `&cypher=${encodeURIComponent(cypher)}&id=${encodeURIComponent(matchId)}`;
   try {
     const res = await fetch(url);
     if (!res.ok) {

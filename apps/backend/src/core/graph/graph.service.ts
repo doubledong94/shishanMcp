@@ -370,17 +370,31 @@ export class GraphService {
    */
   async nodeSource(project: string, nodeId: string) {
     this.assertProject(project);
+    // 前端可用两种 id：node-<Neo4j 内部 identity>（图节点 id）或稳定 id（Neo4j id 属性）。
+    // 重索引后内部 identity 会全部改变，先按 identity 查，未命中则回退按稳定 id 反查，保证
+    // 索引重建后"查看源码"仍能定位。
     const identity = Number(String(nodeId).replace(/^node-/, ""));
-    if (!Number.isInteger(identity)) {
-      throw new Error("非法节点 id");
+    let rec: { get: (k: string) => any } | undefined;
+    if (Number.isInteger(identity)) {
+      const records = (await this.neo4j.run(
+        `MATCH (n) WHERE id(n) = $identity RETURN n LIMIT 1`,
+        { identity },
+        "read",
+      )) as Array<{ get: (k: string) => any }>;
+      rec = records[0];
     }
-    const cypher = `MATCH (n) WHERE id(n) = $identity RETURN n LIMIT 1`;
-    const records = (await this.neo4j.run(cypher, { identity }, "read")) as Array<{ get: (k: string) => any }>;
-    const rec = records[0];
+    if (!rec) {
+      const records = (await this.neo4j.run(
+        `MATCH (n) WHERE n.id = $nodeId RETURN n LIMIT 1`,
+        { nodeId },
+        "read",
+      )) as Array<{ get: (k: string) => any }>;
+      rec = records[0];
+    }
     // 查不到(如索引重建后旧 identity 失效)返回明确的 JSON 对象而非空体/null，避免前端 json() 崩。
-    if (!rec) return { project, id: `node-${identity}`, found: false };
+    if (!rec) return { project, id: nodeId, found: false };
     const n = rec.get("n");
-    if (!n || typeof n !== "object") return { project, id: `node-${identity}`, found: false };
+    if (!n || typeof n !== "object") return { project, id: nodeId, found: false };
     const props = n.properties || {};
     const labels = n.labels || [];
     const file = String(props.file ?? props.filePath ?? "");
