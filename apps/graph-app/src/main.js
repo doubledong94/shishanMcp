@@ -825,13 +825,20 @@ const EDGE_DIM_OF = {
   // 逻辑：条件树（独立维度，ROOT/SUB/ELSE 骨架 + CONTROLS 进入 + LEADS_TO 出口）
   ROOT: "logic", SUB: "logic", ELSE: "logic", CONTROLS: "logic", LEADS_TO: "logic",
 };
+/** 按 sRGB 十六进制构色，跳过 ColorManagement 的 sRGB→线性转换。
+ *  本应用边用自定义 ShaderMaterial 原样输出颜色，若 new THREE.Color(0x…) 把它转成线性，
+ *  再直接写进 sRGB 画布会整体变暗（#e8a33d → #ce5d0c）。这里按"最终显示值(sRGB)"直接存分量，
+ *  shader 原样输出即得图例色。 */
+function srgbHex(hex) {
+  return new THREE.Color().setRGB(((hex >> 16) & 255) / 255, ((hex >> 8) & 255) / 255, (hex & 255) / 255);
+}
 const EDGE_DIM_COLOR = {
-  timing:        new THREE.Color(0xe8a33d), // 琥珀金 时机 NEXT（时序主轴，暖）
-  timingFractal: new THREE.Color(0xe2572c), // 橙红   时机的分形 CALLS（调用=内嵌时序，暖）
-  data:          new THREE.Color(0x2fb95c), // 翠绿   数据 FLOWS（绿家族，暖绿）
-  dataFractal:   new THREE.Color(0x16866e), // 青玉绿 数据的分形 REF/INDEX（结构纵深，深冷绿）
-  logic:         new THREE.Color(0x2f80ed), // 亮蓝   逻辑 条件树（独立，理性蓝）
-  other:         new THREE.Color(0x8b949e), // 中性灰 未纳入
+  timing:        srgbHex(0xe8a33d), // 琥珀金 时机 NEXT（时序主轴，暖）
+  timingFractal: srgbHex(0xe2572c), // 橙红   时机的分形 CALLS（调用=内嵌时序，暖）
+  data:          srgbHex(0x2fb95c), // 翠绿   数据 FLOWS（绿家族，暖绿）
+  dataFractal:   srgbHex(0x16866e), // 青玉绿 数据的分形 REF/INDEX（结构纵深，深冷绿）
+  logic:         srgbHex(0x2f80ed), // 亮蓝   逻辑 条件树（独立，理性蓝）
+  other:         srgbHex(0x8b949e), // 中性灰 未纳入
 };
 /** 边 label → 维度颜色；未纳入各轴维度的（DECLARES/HAS_PARAM/RETURNS/ARG_OF…）归为灰。 */
 function edgeDimColorFor(label, out) {
