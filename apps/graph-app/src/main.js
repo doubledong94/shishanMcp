@@ -24,6 +24,10 @@ const statsEl = document.getElementById("stats");
 const errorEl = document.getElementById("error");
 const resultBox = document.getElementById("result-box");
 const resultRowsEl = document.getElementById("result-rows");
+const historyHeadEl = document.getElementById("history-head");
+const historyCaretEl = document.getElementById("history-caret");
+const historyCountEl = document.getElementById("history-count");
+const historyRowsEl = document.getElementById("history-rows");
 const selEl = document.getElementById("sel");
 const dirSel = document.getElementById("dir");
 const expandBtn = document.getElementById("expand-btn");
@@ -284,6 +288,9 @@ const FLOW_START = new THREE.Color(0.85, 0.85, 0); // 黄
 const FLOW_END = new THREE.Color(1, 0, 1);         // 洋红
 const FLOW_STORE_KEY = "shishan-flow-color";
 const VIEW_TOGGLE_KEY = "shishan-graph-toggles";
+const HISTORY_OPEN_KEY = "shishan-history-open";
+/** 搜索历史面板默认展开；点标题切换并持久化。 */
+let historyOpen = true;
 /** 节点集合的稳定小哈希（与顺序无关），作为"哪张图"的标识。 */
 function graphKey(nodes) {
   let h = 7;
@@ -1846,6 +1853,8 @@ function clearGraph() {
   activeId = null;
   hoverId = null;
   highlightIds = new Set();
+  if (historyCountEl) historyCountEl.textContent = "";
+  if (historyRowsEl) historyRowsEl.innerHTML = "";
 }
 
 /** 把 data 并入当前图并补齐缺失对象/位置（增量，保留已有节点位置 → 供沉降动画）。 */
@@ -1875,6 +1884,7 @@ function renderGraph(data, seedId) {
   statsEl.textContent = `${state.nodes.length} 节点 · ${state.edges.length} 边`;
   errorEl.textContent = "";
   renderResultRows(data.rows);
+  renderSearchHistory(data.history); // 当前图的叠加搜索历史（随图切换）
   // 流色按"图"恢复/清空：同图重渲染恢复着色，换新图（节点集合变化）则清空，防止残留上一张图的颜色
   applyFlowForGraph();
   applyHighlights();
@@ -1921,6 +1931,79 @@ function renderResultRows(rows) {
     }
     resultRowsEl.appendChild(row);
   }
+}
+
+// ---------- 图搜索历史面板（叠加语句列表，可收起） ----------
+/** 展示当前图的叠加搜索历史：每条为一次 query_graph/探索并入。空历史时收起并置灰标题。 */
+function renderSearchHistory(history) {
+  const list = Array.isArray(history) ? history : [];
+  if (historyCountEl) historyCountEl.textContent = list.length ? `${list.length} 条叠加` : "";
+  if (!historyRowsEl) return;
+  historyRowsEl.innerHTML = "";
+  if (list.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "history-empty";
+    empty.textContent = "暂无叠加搜索——当前图为空或尚未用 query_graph 查询";
+    historyRowsEl.appendChild(empty);
+    applyHistoryOpen(false); // 空历史时默认收起，避免占面板
+    return;
+  }
+  for (let i = list.length - 1; i >= 0; i--) { // 最新的排最上
+    const e = list[i];
+    const row = document.createElement("div");
+    row.className = "history-row";
+    const top = document.createElement("span");
+    top.className = "rev";
+    top.textContent = `#${e.rev ?? i + 1}`;
+    row.append(top);
+    if (e.at) {
+      const at = document.createElement("span");
+      at.className = "at";
+      at.textContent = formatHistoryTime(e.at);
+      row.append(at);
+    }
+    const cypher = document.createElement("code");
+    cypher.className = "cypher";
+    cypher.textContent = e.cypher || "(空查询)";
+    cypher.title = "点击复制此搜索语句";
+    cypher.addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      navigator.clipboard?.writeText(cypher.textContent).then(() => toast("已复制该搜索语句")).catch(() => {});
+    });
+    row.append(cypher);
+    if ((e.addedNodes != null && e.addedNodes > 0) || (e.addedEdges != null && e.addedEdges > 0)) {
+      const meta = document.createElement("span");
+      meta.className = "meta";
+      meta.textContent = `  +${e.addedNodes ?? 0}节点 +${e.addedEdges ?? 0}边`;
+      row.append(meta);
+    }
+    historyRowsEl.appendChild(row);
+  }
+  applyHistoryOpen(historyOpen);
+}
+
+function formatHistoryTime(iso) {
+  try {
+    const d = new Date(iso);
+    return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}:${String(d.getSeconds()).padStart(2, "0")}`;
+  } catch { return ""; }
+}
+
+/** 应用折叠态：historyOpen=true 展开显示列表，false 收起。持久化到 localStorage。 */
+function applyHistoryOpen(open) {
+  historyOpen = !!open;
+  if (historyRowsEl) historyRowsEl.hidden = !historyOpen;
+  if (historyCaretEl) historyCaretEl.textContent = historyOpen ? "▾" : "▸";
+  try { localStorage.setItem(HISTORY_OPEN_KEY, historyOpen ? "1" : "0"); } catch { /* 忽略 */ }
+}
+
+function initHistoryToggle() {
+  try {
+    const saved = localStorage.getItem(HISTORY_OPEN_KEY);
+    if (saved === "0") historyOpen = false;
+  } catch { historyOpen = true; }
+  applyHistoryOpen(historyOpen);
+  if (historyHeadEl) historyHeadEl.addEventListener("click", () => applyHistoryOpen(!historyOpen));
 }
 
 function selectionLabels() {
@@ -2248,17 +2331,34 @@ async function load() {
     renderGraph(cur);
     return;
   }
-  // 加载已保存视图 → 重置当前图
-  clearGraph();
-  const viewRes = await fetch(`/api/graph/views/${encodeURIComponent(project)}/${encodeURIComponent(viewId)}`);
-  if (!viewRes.ok) {
-    errorEl.textContent = `加载视图失败: ${viewRes.status}`;
+  // 加载已保存视图 → 用该视图整图替换当前工作图（含其搜索历史），之后新查询在此图上继续叠加
+  const restoreRes = await fetch(`/api/graph/restore`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ project, viewId }),
+  });
+  if (!restoreRes.ok) {
+    errorEl.textContent = `加载视图失败: ${restoreRes.status}`;
     return;
   }
-  const data = await viewRes.json();
-  renderGraph(data);
+  await restoreRes.json();
+  const curRes = await fetch(`/api/graph/current?project=${encodeURIComponent(project)}`);
+  if (!curRes.ok) {
+    errorEl.textContent = `读取替换后的当前工作图失败: ${curRes.status}`;
+    return;
+  }
+  const cur = await curRes.json();
+  clearGraph();
+  if (cur.empty || !cur.nodes?.length) {
+    statsEl.textContent = "该视图为空";
+    renderSearchHistory(cur.history);
+    return;
+  }
+  renderGraph(cur);
+  toast("已用该视图替换当前工作图");
 }
 
+initHistoryToggle(); // 恢复搜索历史面板的收起/展开态
 initThree();
 restoreViewToggles(); // 刷新后恢复流色/维度着色模式；换图/同图都会按当前图重算应用
 document.getElementById("build").textContent = `build ${BUILD}`;

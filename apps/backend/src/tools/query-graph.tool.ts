@@ -156,7 +156,7 @@ export class QueryGraphTool {
         if (tpl.needsParam && input.param == null) {
           return { error: `preset ${input.preset} 需要 param（${tpl.description}）` };
         }
-        return this.graph.queryGraph(input.project, tpl.cypher, params);
+        return this.graph.queryGraph(input.project, tpl.cypher, params, input.preset);
       }
       const cypher = input.cypher || PRESETS.calls.cypher;
       return this.graph.queryGraph(input.project, cypher, params);

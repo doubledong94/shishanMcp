@@ -45,6 +45,22 @@ export interface GraphView {
   rows?: string[];
 }
 
+/** 一次并入当前工作图的搜索记录。一张图（current / 快照）的 history = 它由哪些查询叠加而成。 */
+export interface SearchEntry {
+  /** 并入后 current 的 revision。 */
+  rev: number;
+  at: string;
+  /** 实际执行的 cypher 语句。 */
+  cypher: string;
+  /** 若来自 query_graph 预置模板，记录模板名（无则缺省）。 */
+  preset?: string;
+  addedNodes?: number;
+  addedEdges?: number;
+}
+
+/** 每张图持久化的 history 上限（超出丢弃最旧）。 */
+const HISTORY_LIMIT = 100;
+
 /** 光标符号反查的命中节点（运行时 / 非运行时通用）。line 已归一为 1-based。 */
 export interface SymbolMatch {
   id: string;
@@ -78,6 +94,7 @@ export interface QueryResult {
     addedNodes: number;
     addedEdges: number;
     revision: number;
+    history: SearchEntry[];
   };
 }
 
@@ -136,13 +153,20 @@ export class GraphService {
     project: string,
     cypher: string,
     params: Record<string, unknown> = {},
+    preset?: string,
   ): Promise<QueryResult> {
     this.assertProject(project);
     const records = await this.neo4j.run(cypher, params, "read");
     const view = extractGraphView(cypher, records);
     // 增量并入当前工作图：本次结果按节点 id / 边 key 去重累加（固定页实时跟随、new_graph 命名保存都基于它）。
-    const { merged, addedNodes, addedEdges, revision } = this.mergeCurrent(project, view, cypher);
-    const viewId = this.saveView(project, view, cypher);
+    const { merged, addedNodes, addedEdges, revision, history } = this.mergeCurrent(
+      project,
+      view,
+      cypher,
+      preset,
+    );
+    // 单次查询快照也存"并入后 current 的完整 history"，restore 它即得正确历史起点。
+    const viewId = this.saveView(project, view, cypher, history);
     return {
       project,
       viewId,
@@ -157,6 +181,7 @@ export class GraphService {
         addedNodes,
         addedEdges,
         revision,
+        history,
       },
     };
   }
@@ -177,19 +202,29 @@ export class GraphService {
     return id ? { ...cur, locateId: id } : cur;
   }
 
-  /** 把一次查询的结果并入当前工作图（按 id/边键去重），返回合并后的图与增量统计。 */
+  /** 把一次查询的结果并入当前工作图（按 id/边键去重），返回合并后的图与增量统计；history 追加本次并截断。 */
   private mergeCurrent(
     project: string,
     view: GraphView,
     cypher: string,
-  ): { merged: GraphView; addedNodes: number; addedEdges: number; revision: number } {
+    preset?: string,
+  ): { merged: GraphView; addedNodes: number; addedEdges: number; revision: number; history: SearchEntry[] } {
     const cur = this.readCurrent(project);
     const merged = mergeGraphs(cur, view);
     const addedNodes = merged.nodes.length - cur.nodes.length;
     const addedEdges = merged.edges.length - cur.edges.length;
     const revision = cur.revision + 1;
-    this.writeCurrent(project, { ...merged, cypher }, revision);
-    return { merged, addedNodes, addedEdges, revision };
+    const entry: SearchEntry = {
+      rev: revision,
+      at: new Date().toISOString(),
+      cypher,
+      preset,
+      addedNodes,
+      addedEdges,
+    };
+    const history = [...cur.history, entry].slice(-HISTORY_LIMIT);
+    this.writeCurrent(project, { ...merged }, revision, history);
+    return { merged, addedNodes, addedEdges, revision, history };
   }
 
   /**
@@ -203,11 +238,11 @@ export class GraphService {
     const oldEdges = cur.edges.length;
     // 无内容可保存：幂等清空，返回 nothingToSave。
     if (oldNodes === 0 && oldEdges === 0 && (!cur.rows || cur.rows.length === 0)) {
-      this.writeCurrent(project, { nodes: [], edges: [] }, cur.revision + 1);
+      this.writeCurrent(project, { nodes: [], edges: [] }, cur.revision + 1, []);
       return { project, saved: null, cleared: true, clearedNodes: 0 };
     }
     const id = this.saveNamedView(project, cur, name.trim());
-    this.writeCurrent(project, { nodes: [], edges: [] }, cur.revision + 1);
+    this.writeCurrent(project, { nodes: [], edges: [] }, cur.revision + 1, []);
     return {
       project,
       saved: {
@@ -219,6 +254,59 @@ export class GraphService {
       },
       cleared: true,
       clearedNodes: oldNodes,
+    };
+  }
+
+  /**
+   * 用一份已保存视图整图替换当前工作图（不是叠加）：把快照的内容 + 它存下的 history 原样写入
+   * `__current__.json`（丢弃原 current），替换后的 current 历史 = 该视图历史；此后新的查询从这
+   * 张替换后的图上继续叠加（history 继续 append）。revision 在现有基础上 +1 作为新起点。
+   */
+  restoreViewAsCurrent(
+    project: string,
+    viewId: string,
+  ): { ok: boolean; project: string; viewId: string; nodes: number; edges: number } {
+    this.assertProject(project);
+    const view = this.loadView(project, viewId);
+    if (!view) {
+      throw new Error(`视图不存在：${project}/${viewId}`);
+    }
+    const prev = this.readCurrent(project);
+    const nodes = (view as { nodes?: GraphNode[] }).nodes || [];
+    const edges = (view as { edges?: GraphEdge[] }).edges || [];
+    const rows = (view as { rows?: string[] }).rows;
+    const history = (view as { history?: SearchEntry[] }).history || [];
+    this.writeCurrent(project, { nodes, edges, rows }, prev.revision + 1, history);
+    return { ok: true, project, viewId, nodes: nodes.length, edges: edges.length };
+  }
+
+  /** 返回某项目当前工作图（或某快照）的叠加搜索历史：供 MCP 只读工具与前端冗余兜底直查。 */
+  getGraphHistory(project: string, viewId?: string) {
+    this.assertProject(project);
+    if (viewId) {
+      const view = this.loadView(project, viewId);
+      if (!view) {
+        throw new Error(`视图不存在：${project}/${viewId}`);
+      }
+      const v = view as { nodes?: GraphNode[]; edges?: GraphEdge[]; history?: SearchEntry[] };
+      return {
+        project,
+        viewId,
+        kind: "view",
+        nodes: (v.nodes || []).length,
+        edges: (v.edges || []).length,
+        history: v.history || [],
+      };
+    }
+    const cur = this.readCurrent(project);
+    return {
+      project,
+      viewId: "__current__",
+      kind: "current",
+      nodes: cur.nodes.length,
+      edges: cur.edges.length,
+      revision: cur.revision,
+      history: cur.history,
     };
   }
 
@@ -237,6 +325,7 @@ export class GraphService {
         edges,
         rows: raw.rows,
         cypher: raw.cypher || "",
+        history: Array.isArray(raw.history) ? (raw.history as SearchEntry[]) : [],
         revision: Number(raw.revision) || 0,
         updatedAt: raw.updatedAt || "",
         empty: nodes.length === 0 && edges.length === 0 && !(Array.isArray(raw.rows) && raw.rows.length > 0),
@@ -249,6 +338,7 @@ export class GraphService {
         kind: "current",
         nodes: [],
         edges: [],
+        history: [],
         revision: 0,
         updatedAt: "",
         empty: true,
@@ -256,11 +346,18 @@ export class GraphService {
     }
   }
 
-  /** 写当前工作图（__current__.json）。 */
-  private writeCurrent(project: string, view: GraphView & { cypher?: string }, revision: number): void {
+  /** 写当前工作图（__current__.json）。history 显式传入（调用点决定 append/reset/带入），cypher 取最近一条历史或显式 cypher。 */
+  private writeCurrent(
+    project: string,
+    view: GraphView & { cypher?: string },
+    revision: number,
+    history: SearchEntry[] = [],
+  ): void {
     const dir = path.join(this.data.getRoot(), "projects", project);
     fs.mkdirSync(dir, { recursive: true });
     const prev = this.readCurrent(project);
+    const lastCypher =
+      view.cypher || (history.length ? history[history.length - 1].cypher : prev.cypher || "");
     fs.writeFileSync(
       this.currentPath(project),
       JSON.stringify(
@@ -269,7 +366,8 @@ export class GraphService {
           project,
           name: "当前工作图（实时）",
           kind: "current",
-          cypher: view.cypher || prev.cypher || "",
+          cypher: lastCypher,
+          history,
           createdAt: prev.updatedAt || new Date().toISOString(),
           updatedAt: new Date().toISOString(),
           revision,
@@ -283,10 +381,10 @@ export class GraphService {
     );
   }
 
-  /** 命名保存一份历史快照：id 由名字 slug + 短时间戳构成，快照内带可读 name。 */
+  /** 命名保存一份历史快照：id 由名字 slug + 短时间戳构成，快照内带可读 name 与当时 current 的 history。 */
   private saveNamedView(
     project: string,
-    src: { nodes: GraphNode[]; edges: GraphEdge[]; rows?: string[]; cypher?: string },
+    src: { nodes: GraphNode[]; edges: GraphEdge[]; rows?: string[]; cypher?: string; history?: SearchEntry[] },
     name: string,
   ): string {
     const id = `${toSlug(name) || "graph"}-${Date.now().toString(36)}`;
@@ -301,6 +399,7 @@ export class GraphService {
           name: name || id,
           kind: "saved",
           cypher: src.cypher || "",
+          history: src.history || [],
           createdAt: new Date().toISOString(),
           nodes: src.nodes,
           edges: src.edges,
@@ -415,7 +514,10 @@ export class GraphService {
   }
 
   /** 取某个已保存的快照（供前端渲染）。 */
-  loadView(project: string, viewId: string): (GraphView & { id: string; project: string; cypher: string }) | null {
+  loadView(
+    project: string,
+    viewId: string,
+  ): (GraphView & { id: string; project: string; cypher: string; history?: SearchEntry[] }) | null {
     const file = viewPath(this.data.getRoot(), project, viewId);
     try {
       return JSON.parse(fs.readFileSync(file, "utf8"));
@@ -466,14 +568,14 @@ export class GraphService {
     }
   }
 
-  private saveView(project: string, view: GraphView, cypher: string): string {
+  private saveView(project: string, view: GraphView, cypher: string, history: SearchEntry[] = []): string {
     const id = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
     const dir = path.join(this.data.getRoot(), "projects", project);
     fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(
       viewPath(this.data.getRoot(), project, id),
       JSON.stringify(
-        { id, project, cypher, createdAt: new Date().toISOString(), ...view },
+        { id, project, cypher, history, createdAt: new Date().toISOString(), ...view },
         null,
         2,
       ),

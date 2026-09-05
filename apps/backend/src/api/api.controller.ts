@@ -180,6 +180,24 @@ export class ApiController {
     return this.graph.getCurrent(project);
   }
 
+  /** 用一份已保存视图整图替换当前工作图（含该视图的搜索历史），返回替换后的 current 概况。 */
+  @Post("graph/restore")
+  restoreCurrent(@Body() body: { project?: string; viewId?: string }) {
+    if (!body.project || !body.viewId) {
+      throw new BadRequestException("需要 project 和 viewId 参数");
+    }
+    return this.graph.restoreViewAsCurrent(body.project, body.viewId);
+  }
+
+  /** 返回某项目当前工作图（或某快照）的叠加搜索历史：前端/MCP 冗余兜底直查。 */
+  @Get("graph/history")
+  getGraphHistory(@Query("project") project?: string, @Query("viewId") viewId?: string) {
+    if (!project) {
+      throw new BadRequestException("需要 project 参数");
+    }
+    return this.graph.getGraphHistory(project, viewId || undefined);
+  }
+
   /**
    * 按稳定唯一 id（Neo4j 的 id 属性）在前端图定位：设置"待定位 id"，前端 /current 轮询到后
    * 自动选中并居中该节点。与后端 MATCH (n {id:<值>}) 对应，两端定位同一个节点。

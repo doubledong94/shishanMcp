@@ -13,7 +13,12 @@
         position: fixed; top: 12px; right: 12px; z-index: 10;
         background: rgba(13,17,23,0.85); border: 1px solid #30363d;
         border-radius: 8px; padding: 12px; width: 300px; font-size: 13px;
+        /* 内容（项目/视图下拉、统计、结果、搜索历史、探索…）超出视口时面板内滚动 */
+        max-height: calc(100vh - 24px); overflow-y: auto;
       }
+      .panel::-webkit-scrollbar { width: 8px; }
+      .panel::-webkit-scrollbar-thumb { background: #30363d; border-radius: 4px; }
+      .panel::-webkit-scrollbar-thumb:hover { background: #484f58; }
       .panel h1 { font-size: 15px; margin-bottom: 8px; color: #e6edf3; }
       .panel label { display: block; margin: 6px 0 3px; color: #8b949e; }
       .panel input, .panel select, .panel textarea {
@@ -56,6 +61,30 @@
       }
       .result-box .result-row:last-child { border-bottom: none; }
       .result-box .result-row b { color: #58a6ff; font-weight: 600; }
+
+      /* 图搜索历史（叠加语句列表，可收起） */
+      .history-box { margin-top: 12px; border-top: 1px solid #30363d; padding-top: 8px; }
+      .history-head {
+        display: flex; align-items: center; gap: 6px; cursor: pointer;
+        font-size: 13px; color: #e6edf3; user-select: none; margin-bottom: 4px;
+      }
+      .history-head .caret { display: inline-block; width: 12px; color: #8b949e; }
+      .history-head .count { margin-left: auto; color: #8b949e; font-size: 11px; }
+      .history-rows {
+        max-height: 28vh; overflow: auto; background: #161b22;
+        border: 1px solid #30363d; border-radius: 6px;
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px;
+      }
+      .history-row { padding: 5px 8px; border-bottom: 1px solid #21262d; color: #c9d1d9; }
+      .history-row:last-child { border-bottom: none; }
+      .history-row .rev { color: #8b949e; font-size: 11px; }
+      .history-row .at { color: #8b949e; font-size: 11px; float: right; }
+      .history-row .cypher {
+        display: block; margin-top: 2px; color: #e6edf3; white-space: pre-wrap;
+        word-break: break-all; cursor: text;
+      }
+      .history-row .meta { color: #58a6ff; font-size: 11px; }
+      .history-empty { color: #8b949e; font-size: 12px; padding: 6px 2px; }
 
       /* ---------- 顶部菜单栏（IDE 风格：标题 + 下拉 + 右侧快捷键） ---------- */
       .menubar {
@@ -275,6 +304,13 @@
       <div class="result-box" id="result-box" hidden>
         <h2>查询结果</h2>
         <div class="result-rows" id="result-rows"></div>
+      </div>
+      <div class="history-box" id="history-box">
+        <div class="history-head" id="history-head" title="本图由哪些搜索叠加而成（点击收起/展开）">
+          <span class="caret" id="history-caret">▾</span><span>搜索历史</span>
+          <span class="count" id="history-count"></span>
+        </div>
+        <div class="history-rows" id="history-rows" hidden></div>
       </div>
       <div class="explore">
         <h2>探索</h2>
