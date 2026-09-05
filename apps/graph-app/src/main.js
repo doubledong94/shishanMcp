@@ -603,7 +603,7 @@ function updateEdgeBuffers() {
     eDirArr[(o + 2) * 3] = -dx; eDirArr[(o + 2) * 3 + 1] = -dy; eDirArr[(o + 2) * 3 + 2] = -dz;
     eDirArr[(o + 3) * 3] = -dx; eDirArr[(o + 3) * 3 + 1] = -dy; eDirArr[(o + 3) * 3 + 2] = -dz;
     if (dimEdgeOn) {
-      // 按维度平色覆盖（两端同色），区分五维度
+      // 按维度平色覆盖（两端同色），区分各轴维度
       edgeDimColorFor(e.label, _EDGE_C0);
       eColArr[(o + 0) * 3] = _EDGE_C0.r; eColArr[(o + 0) * 3 + 1] = _EDGE_C0.g; eColArr[(o + 0) * 3 + 2] = _EDGE_C0.b;
       eColArr[(o + 3) * 3] = _EDGE_C0.r; eColArr[(o + 3) * 3 + 1] = _EDGE_C0.g; eColArr[(o + 3) * 3 + 2] = _EDGE_C0.b;
@@ -657,10 +657,10 @@ function nodeKind(id) { const n = nodesById.get(id); return n ? (n.kind || n.lab
 
 /**
  * NEXT 链"Value 降层"布局（固定位置）：
- *  - 主链 = 事件（CalledMethod / Condition），按执行顺序（NEXT 拓扑序）排成一条从左到右的线，y=0；
+ *  - 主链 = 事件（CalledMethod / Condition），按执行时序（NEXT 拓扑序）排成一条从左到右的线，y=0；
  *  - 数据坑 = Value 节点（实参槽/返回值/读取），放到与其相邻两个事件的横向中点下方（y 下移 gutter），
  *    同一对事件之间的多个 Value 在坑里上下叠（vpitch 节距）。
- * 这样函数的执行顺序一目了然，Value 仍可见（不隐藏）、不占用主链横向步距，线更短更清爽。
+ * 这样函数的时序一目了然，Value 仍可见（不隐藏）、不占用主链横向步距，线更短更清爽。
  */
 function computeDotLayout() {
   if (!dotLayoutOn) { dotNodes.clear(); nextAnchors.clear(); dotRank.clear(); return; } // 默认全量力导
@@ -803,29 +803,29 @@ function resolveFixedOverlaps(ids, minSep) {
   }
 }
 
-// ---------- 按维度着色边（五维度 ↔ 边颜色） ----------
+// ---------- 按维度着色边（时序/数据两轴 + 逻辑 ↔ 边颜色） ----------
 let dimEdgeOn = false;
 const EDGE_DIM_OF = {
-  // 时机
-  CALLS: "timing",
-  // 数据
+  // 时机（时序主轴）：语句按执行先后
+  NEXT: "timing",
+  // 时机的分形：一次调用内嵌一段新的执行时序（自相似递归）
+  CALLS: "timingFractal",
+  // 数据（主轴）：值流动
   FLOWS: "data",
-  // 逻辑（条件树 + 进出）
+  // 数据的分形：访问成员 / 数组下标（结构自相似嵌套）
+  REF: "dataFractal", REFERENCES: "dataFractal", INDEX: "dataFractal",
+  // 逻辑：条件树（独立维度，ROOT/SUB/ELSE 骨架 + CONTROLS 进入 + LEADS_TO 出口）
   ROOT: "logic", SUB: "logic", ELSE: "logic", CONTROLS: "logic", LEADS_TO: "logic",
-  // 嵌套
-  REF: "nesting", REFERENCES: "nesting", INDEX: "nesting",
-  // 顺序
-  NEXT: "order",
 };
 const EDGE_DIM_COLOR = {
-  timing: new THREE.Color(0xf0884e), // 橙红 时机 CALLS（执行/激活 = 暖色）
-  data: new THREE.Color(0x57d6a0),   // 薄荷绿 数据 FLOWS（数据/流动 = 生命色）
-  logic: new THREE.Color(0x6ea8fe),  // 蓝  逻辑 条件树（逻辑/理性 = 冷色）
-  nesting: new THREE.Color(0xc9a0ff),// 薰衣草紫 嵌套 REF/INDEX（结构/层次 = 纵深色）
-  order: new THREE.Color(0x56d3e0),  // 青  顺序 NEXT（时间/序列 = 流动色）
-  other: new THREE.Color(0x8b949e),  // 中性灰 未纳入五维度
+  timing:        new THREE.Color(0xe8a33d), // 琥珀金 时机 NEXT（时序主轴，暖）
+  timingFractal: new THREE.Color(0xe2572c), // 橙红   时机的分形 CALLS（调用=内嵌时序，暖）
+  data:          new THREE.Color(0x2fb95c), // 翠绿   数据 FLOWS（绿家族，暖绿）
+  dataFractal:   new THREE.Color(0x16866e), // 青玉绿 数据的分形 REF/INDEX（结构纵深，深冷绿）
+  logic:         new THREE.Color(0x2f80ed), // 亮蓝   逻辑 条件树（独立，理性蓝）
+  other:         new THREE.Color(0x8b949e), // 中性灰 未纳入
 };
-/** 边 label → 维度颜色；未纳入五维度的（DECLARES/HAS_PARAM/RETURNS/ARG_OF…）归为灰。 */
+/** 边 label → 维度颜色；未纳入各轴维度的（DECLARES/HAS_PARAM/RETURNS/ARG_OF…）归为灰。 */
 function edgeDimColorFor(label, out) {
   const dim = EDGE_DIM_OF[label] || "other";
   out.copy(EDGE_DIM_COLOR[dim]);

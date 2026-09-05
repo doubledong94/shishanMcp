@@ -98,8 +98,8 @@ NEO4J_DATABASE  # 可选
 | `(:Value)-[:RET_OF]->(:CalledMethod)` | 返回值使用属于哪个调用点 | 同上 |
 | `(:Value)-[:FLOWS]->(:Value)` | 数据流（赋值/读写/传参/返回值） | `flow(Mk, S, D)` |
 | `(:Value)-[:CONTROLS]->(:Condition)` | 条件变量守卫哪个分支 | `toConditionValue→conditionItem` |
-| `(:Value)-[:REF]->(:CalledMethod)` | 嵌套方向：实例引用访问成员 | Reference |
-| `(:Value\|:CalledMethod\|:Condition)-[:NEXT]->(...)` | 执行顺序：事件级链，块尾接到块外后续、函数尾跨函数接到调用点（第 5 方向）。**所有运行时 value 事件都入链**（函数体直排 value、实参列表/条件表达式内部读取、实参槽 CALLED_PARAM、嵌套调用 CALLED_RETURN、索引元素 INDEX、返回 RETURN），保证 method↔value、value↔value 顺序连续、节点不孤立；实参槽在调用点按执行序入链（`...→实参求值→实参槽→调用→返回→...`） | `codeOrder(Mk, S, D)` |
+| `(:Value)-[:REF]->(:CalledMethod)` | 数据的分形：实例引用访问成员 | Reference |
+| `(:Value\|:CalledMethod\|:Condition)-[:NEXT]->(...)` | 时机（时序主轴）：事件级链，块尾接到块外后续、函数尾跨函数接到调用点。**所有运行时 value 事件都入链**（函数体直排 value、实参列表/条件表达式内部读取、实参槽 CALLED_PARAM、嵌套调用 CALLED_RETURN、索引元素 INDEX、返回 RETURN），保证 method↔value、value↔value 时序连续、节点不孤立；实参槽在调用点按执行序入链（`...→实参求值→实参槽→调用→返回→...`） | `codeOrder(Mk, S, D)` |
 | `(:Condition)-[:NEXT]->(then首事件)` / `(:Condition)-[:ELSE]->(else首事件)` | 分支入口：then 走 NEXT（条件为 true）、else 走 ELSE（条件为 false）；守卫表达式经 `CONTROLS` 查询 | `toConditionValue→conditionItem` + 分支结构 |
 
 ### 3.3 属性
@@ -110,7 +110,7 @@ NEO4J_DATABASE  # 可选
 
 | 决策 | 结论 | 理由 |
 | --- | --- | --- |
-| CalledMethod 独立节点 vs 属性边 | **独立节点** | 相交搜索的枢纽；多个方向（时机/数据/嵌套）汇聚到同一调用点 |
+| CalledMethod 独立节点 vs 属性边 | **独立节点** | 相交搜索的枢纽；时序轴/数据轴（各含分形）与逻辑多方向汇聚到同一调用点 |
 | CalledParam / CalledReturn | **保留** | 数据流进出调用的"接头"，与其他方向汇合 |
 | Condition | **保留** | if/else 顺序 + 分支聚合身份是**不可压缩的分支结构**，边类型表达不了 |
 | TimingStep / DataStep / Reference | **删除** | 它们承载的只是方向标签 + 边界语义 + 归并便利，全部可迁移到边类型 CALLS / FLOWS / REF |
@@ -118,7 +118,7 @@ NEO4J_DATABASE  # 可选
 
 ### 4.1 为什么方法上下文可以不落库
 
-跨方法的数据流必然穿过 called-instance（传参 `calledParam→param`、返回值 `return→calledReturn`），在**方法边界**处数据流和时机流天然相交于同一枢纽。方法内数据流给出归属的方式：**Value 节点与调用点统一经 `LEADS_TO`**（Condition→节点，恒发）连到所在条件/方法根 → 条件树 → Method。前提：**每个 Value 节点都必须 `LEADS_TO` 一个分支**（旧 `addTimingFlow` 正是把全部 item 连到所在块 condition），否则远离调用边界的数据流节点无法找回方法。
+跨方法的数据流必然穿过 called-instance（传参 `calledParam→param`、返回值 `return→calledReturn`），在**方法边界**处数据轴（FLOWS）与时序轴（经调用分形 CALLS 接入的 NEXT）天然相交于同一枢纽。方法内数据流给出归属的方式：**Value 节点与调用点统一经 `LEADS_TO`**（Condition→节点，恒发）连到所在条件/方法根 → 条件树 → Method。前提：**每个 Value 节点都必须 `LEADS_TO` 一个分支**（旧 `addTimingFlow` 正是把全部 item 连到所在块 condition），否则远离调用边界的数据流节点无法找回方法。
 
 ## 5. 旧 prolog → Neo4j 映射
 
@@ -172,7 +172,7 @@ Neo4j 只支持二元关系，n 元谓词统一用三种方式降维：
 
 > 以下为概念模板，实现时再细化。旧项目 5 个方向的语义对应关系见 `shishandaimaViewer/README.md`。
 
-**时机传递（调用栈）：** `android.view.View` 内部的调用栈
+**调用（时机的分形）：** `android.view.View` 内部的调用栈
 ```cypher
 MATCH (m:Method)-[:ROOT]->(:Condition)-[:SUB*0..]->(c)-[:LEADS_TO]->(cm:CalledMethod)-[:CALLS]->(m2:Method)
 WHERE m.name CONTAINS "View"
@@ -191,13 +191,13 @@ MATCH (f:Value {name:"mViewFlags"})-[:CONTROLS]->(:Condition)-[:LEADS_TO]->(cm:C
 RETURN f, cm
 ```
 
-**类嵌套：** `B.a1` 引用的对象上发起了哪些调用
+**数据的分形（成员访问）：** `B.a1` 引用的对象上发起了哪些调用
 ```cypher
 MATCH (v:Value {name:"a1"})-[:REF]->(cm:CalledMethod)-[:CALLS]->(m:Method)
 RETURN v, cm, m
 ```
 
-**相交搜索：** 找出将 `i1` 传入 `a1.a` 的调用（B.i1 数据流 与 B.a1 类嵌套 交于同一 calledMethod）
+**相交搜索：** 找出将 `i1` 传入 `a1.a` 的调用（B.i1 数据流 与 B.a1 成员访问(数据的分形) 交于同一 calledMethod）
 ```cypher
 MATCH (v1:Value {name:"i1"})-[:FLOWS]->(cp:Value)-[:ARG_OF]->(cm:CalledMethod)
 MATCH (v2:Value {name:"a1"})-[:REF]->(cm)
@@ -224,7 +224,7 @@ RETURN cm, v1, v2
 - [x] shishanMcp：`generate_scip_index` 返回写入统计（graph 字段）；`import_to_graph` 已移除（fork 直写为唯一入库路径，旧 SCIP-JSON 导入链删除）；`query_graph` 新增 preset 预置模板
 - [x] fork：运行时值节点（每次出现一个，读写区分）+ FLOWS（赋值/末写/传参/返回）+ CONTROLS + REF + ELSE + CalledReturn
 - [x] fork：分支感知数据流（分支作用域复制父态 / 并集合并 / 嵌套 / 循环反馈 / return 分支不合并 / 确定性赋值清空预写 / 反馈 happenLaterThan / 循环携带依赖 outer-only 读进反馈 / unwrittenReads 向上传播）
-- [x] fork：写穿引用（reversedRef：`obj.field = x` 写目标为字段、基对象记已写）+ 字段访问 REF 边（类嵌套方向）
+- [x] fork：写穿引用（reversedRef：`obj.field = x` 写目标为字段、基对象记已写）+ 字段访问 REF 边（数据的分形）
 - [x] fork：跨方法传参绑定（calledParam→callee 形参，按声明序）、跨方法返回值绑定（callee return→calledReturn）
 - [x] fork：数组访问 INDEX 边（`arr[i]`）；引用方向细化（markUnreadReturn：写目标 REF 翻转 member→base）
 - [x] 全量验证：`deploy-graph.sh --scip-java <fork> okhttp` 端到端（网关 → fork → Neo4j 直写 → backend 工具可用）

@@ -243,11 +243,11 @@
           <button class="menu-item" id="mi-dim-edge">按维度着色边<span class="kbd">Ctrl+Shift+D</span></button>
           <div class="dim-legend">
             <div class="dim-state" id="dim-state">维度着色：关</div>
-            <span class="dim-swatch"><i style="background:#f0884e"></i>时机</span>
-            <span class="dim-swatch"><i style="background:#57d6a0"></i>数据</span>
-            <span class="dim-swatch"><i style="background:#6ea8fe"></i>逻辑</span>
-            <span class="dim-swatch"><i style="background:#c9a0ff"></i>嵌套</span>
-            <span class="dim-swatch"><i style="background:#56d3e0"></i>顺序</span>
+            <span class="dim-swatch"><i style="background:#e8a33d"></i>时机</span>
+            <span class="dim-swatch"><i style="background:#e2572c"></i>时机的分形</span>
+            <span class="dim-swatch"><i style="background:#2fb95c"></i>数据</span>
+            <span class="dim-swatch"><i style="background:#16866e"></i>数据的分形</span>
+            <span class="dim-swatch"><i style="background:#2f80ed"></i>逻辑</span>
             <span class="dim-swatch"><i style="background:#8b949e"></i>其他</span>
           </div>
         </div>
@@ -282,10 +282,10 @@
         <label for="dir">沿方向扩展</label>
         <select id="dir">
           <option value="FLOWS">FLOWS 数据流</option>
-          <option value="CALLS">CALLS 调用</option>
-          <option value="REF">REF 类嵌套</option>
+          <option value="CALLS">CALLS 调用(时机的分形)</option>
+          <option value="REF">REF 数据的分形</option>
           <option value="CONTROLS">CONTROLS 逻辑控制</option>
-          <option value="NEXT">NEXT 执行顺序</option>
+          <option value="NEXT">NEXT 时机(时序主轴)</option>
           <option value="ARG_OF">ARG_OF 实参归属</option>
           <option value="LEADS_TO">LEADS_TO 条件通往节点</option>
         </select>
@@ -309,7 +309,7 @@
         2D：左/右键拖拽平移 / 滚轮缩放 / 中键绕 Z 旋转。3D：左键拖拽轨道旋转 / 右键平移 / 中键绕 Z 滚转 / 滚轮缩放。
         触屏：单指=2D 平移/3D 旋转，双指=捏合缩放，轻点节点选中、双击聚焦。
         单击节点选中（半透明→变亮并显示标签）、双击平滑聚焦、
-        右键让边沿流光脉冲级联。选中后可沿方向（数据流/调用/嵌套/控制/顺序）扩展。
+        右键让边沿流光脉冲级联。选中后可沿方向（数据/调用·时机分形/数据分形/控制/时序·时机）扩展。
       </div>
       <div class="build" id="build"></div>
     </div>

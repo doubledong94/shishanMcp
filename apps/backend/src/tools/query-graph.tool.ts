@@ -13,7 +13,7 @@ import { mountedProjectList, mountedProjectsHint } from "./mounted-projects";
  */
 const PRESETS: Record<string, { description: string; needsParam: boolean; cypher: string }> = {
   calls: {
-    description: "调用图：方法→分支→调用点→被调方法（时机传递）",
+    description: "调用图：方法→分支→调用点→被调方法（时序经调用分形跨函数展开）",
     needsParam: false,
     cypher:
       "MATCH (m:Method {projectId:$project})-[:ROOT]->(:Condition)-[:SUB*0..]->(c:Condition)-[:LEADS_TO]->(cm:CalledMethod)-[:CALLS]->(callee:Method) RETURN m, c, cm, callee LIMIT 500",
@@ -31,7 +31,7 @@ const PRESETS: Record<string, { description: string; needsParam: boolean; cypher
       "MATCH (c:Condition {projectId:$project})-[:LEADS_TO]->(cm:CalledMethod)-[:CALLS]->(m:Method) RETURN c, cm, m LIMIT 500",
   },
   nesting: {
-    description: "类嵌套：实例引用→调用点",
+    description: "数据的分形：实例引用→调用点",
     needsParam: false,
     cypher:
       "MATCH (v:Value {projectId:$project})-[:REF]->(cm:CalledMethod)-[:CALLS]->(m:Method) RETURN v, cm, m LIMIT 500",
@@ -79,25 +79,25 @@ const PRESETS: Record<string, { description: string; needsParam: boolean; cypher
       "MATCH (c:Class {projectId:$project}) WHERE c.package STARTS WITH $name RETURN c LIMIT 500",
   },
   intersection: {
-    description: "相交：数据流(值→实参) ∩ 类嵌套(实例→调用) 汇聚于同一调用点",
+    description: "相交：数据流(值→实参) ∩ 数据的分形(实例→调用) 汇聚于同一调用点",
     needsParam: false,
     cypher:
       "MATCH (v1:Value {projectId:$project})-[:FLOWS]->(cp:Value {projectId:$project,kind:'CALLED_PARAM'})-[:ARG_OF]->(cm:CalledMethod)-[:CALLS]->(m:Method) MATCH (v2:Value {projectId:$project})-[:REF]->(cm) RETURN v1, cp, cm, m, v2 LIMIT 500",
   },
   codeorder: {
-    description: "执行顺序：块内语句的先后（NEXT 链，第 5 方向）",
+    description: "时机（时序主轴）：块内语句的先后（NEXT 链）",
     needsParam: false,
     cypher:
       "MATCH p=(a {projectId:$project})-[:NEXT*1..8]->(b {projectId:$project}) RETURN p LIMIT 50",
   },
   order_true: {
-    description: "某表达式为 true 时的执行顺序（param=表达式名，经 CONTROLS 找条件、走 then 的 NEXT 链）",
+    description: "某表达式为 true 时的时序（param=表达式名，经 CONTROLS 找条件、走 then 的 NEXT 链）",
     needsParam: true,
     cypher:
       "MATCH (e:Value {projectId:$project, name:$name})-[:CONTROLS]->(c:Condition) MATCH p=(c)-[:NEXT*1..6]->(x {projectId:$project}) RETURN p LIMIT 50",
   },
   order_false: {
-    description: "某表达式为 false 时的执行顺序（param=表达式名，走条件 else 分支的链）",
+    description: "某表达式为 false 时的时序（param=表达式名，走条件 else 分支的链）",
     needsParam: true,
     cypher:
       "MATCH (e:Value {projectId:$project, name:$name})-[:CONTROLS]->(c:Condition) MATCH p=(c)-[:ELSE]->(y {projectId:$project})-[:NEXT*1..5]->(x {projectId:$project}) RETURN p LIMIT 50",
