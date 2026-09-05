@@ -1151,6 +1151,7 @@ let _dragPin = null;   // stepLayout 中被拖节点的鼠标位快照（力导�
 // 避免与「单击切换选中」冲突：第二次单击不再切换，而是选中+聚焦）。
 const DBL_TIMEOUT = 500;
 let lastClick = { id: null, time: 0 };
+let clickTimer = null; // 单击延迟定时器：等到确认不是双击后才执行单击回调，避免单击/双击冲突
 const keysHeld = new Set(); // 数字键 5-9（维度选择）
 let tooltipEl = null; // 悬停信息浮窗
 
@@ -1251,30 +1252,43 @@ function openNodeSource(id) {
   errorEl.textContent = `无法从节点「${cand || id}」定位源码文件`;
 }
 
-/** 单击/组合键 统一入口：双击态机 + 组合键 + 切换选中。空点 = 无操作（对齐旧项目）。 */
+/** 清掉挂起的单击定时器。 */
+function clearClickTimer() {
+  if (clickTimer) { clearTimeout(clickTimer); clickTimer = null; }
+}
+
+/** 单击/组合键 统一入口：单击延迟到确认非双击后才执行，避免单击(选中)与双击(查看源码)冲突。 */
 function handleNodeClick(id, e) {
   console.log(`[DBG] click id=${id} kind=${(nodesById.get(id) || {}).kind} inNodeIx=${nodeIx.has(id)}`);
-  if (id == null) {
+  if (id == null) { clearClickTimer(); lastClick.id = null; lastClick.time = 0; return; }
+  const now = performance.now();
+  // 组合键是独立动作：立即执行并清掉挂起的单击，不参与单击/双击判定。
+  if (e.ctrlKey) { clearClickTimer(); lastClick.id = id; lastClick.time = now; selectConnectedComponent(id); return; }
+  if (e.shiftKey) { clearClickTimer(); lastClick.id = id; lastClick.time = now; openNodeSource(id); return; }
+  const dim = heldKeyNum();
+  if (dim) { clearClickTimer(); lastClick.id = id; lastClick.time = now; selectNeighbors(id, dim - 4); return; }
+  // 同节点 500ms 内第二次单击 → 双击：取消挂起的单击、不选中，打开源码。
+  if (lastClick.id === id && now - lastClick.time <= DBL_TIMEOUT) {
+    clearClickTimer();
     lastClick.id = null;
     lastClick.time = 0;
+    viewSourceForNode(id);
     return;
   }
-  const now = performance.now();
-  if (e.ctrlKey) { lastClick.id = id; lastClick.time = now; selectConnectedComponent(id); return; }
-  if (e.shiftKey) { lastClick.id = id; lastClick.time = now; openNodeSource(id); return; }
-  const dim = heldKeyNum();
-  if (dim) { lastClick.id = id; lastClick.time = now; selectNeighbors(id, dim - 4); return; }
-  if (lastClick.id === id && now - lastClick.time <= DBL_TIMEOUT) {
-    // 同一节点 500ms 内第二次单击 → 双击聚焦（不切换，保持选中）
-    lastClick.id = null;
-    lastClick.time = 0;
-    selectOnly(id);
-    focusNode(id);
-    return;
+  // 非双击：若上一次挂起的单击是"别的节点"，它已确认是单击（新点了不同节点），立即执行其选中，
+  // 避免延迟单击把快速连点不同节点时的前一次选中丢掉。
+  if (clickTimer) {
+    clearTimeout(clickTimer); clickTimer = null;
+    if (lastClick.id != null && lastClick.id !== id) toggleSelect(lastClick.id);
   }
   lastClick.id = id;
   lastClick.time = now;
-  toggleSelect(id); // 单击：切换选中（多选，对齐旧项目）
+  clickTimer = setTimeout(() => {
+    clickTimer = null;
+    lastClick.id = null;
+    lastClick.time = 0;
+    toggleSelect(id); // 确认是单击：切换选中（多选，对齐旧项目）
+  }, DBL_TIMEOUT);
 }
 
 function setupInteraction() {
@@ -1493,10 +1507,9 @@ function setupInteraction() {
       const wasSingle = touchPoints.size === 1;
       touchPoints.delete(e.pointerId);
       if (touchPoints.size < 2) pinchActive = false;
-      // 取消长按 & 悬停（抬手即取消）
+      // 取消长按
       clearTimeout(pressTimer);
       pressActive = false;
-      clearHoverAt();
       // 2D 单手拖拽收尾 + 3D 节点拖拽收尾（恢复相机）
       if (layoutMode === "2d" && drag.active) drag.active = false;
       if (layoutMode === "3d" && dragNodeId != null) { _drag3d = null; controls.enabled = true; }
@@ -1507,11 +1520,16 @@ function setupInteraction() {
         const moved = Math.hypot(e.clientX - downAt.x, e.clientY - downAt.y);
         if (moved <= 10) {
           const id = pickNode(e.clientX, e.clientY);
-          handleNodeClick(id, e); // 切换选中 / 双击聚焦 / 组合键；空点无操作
+          // tap：保留 hover 高亮、先收 tooltip——避免"按下亮-抬手灭-0.5s 选中又亮"的闪烁；
+          // 节点保持点亮，由随后的单击/双击(选中/查看源码)接管。仅非 tap(拖动/捏合/长按)才清 hover。
+          hideTooltip();
+          handleNodeClick(id, e);
+          return; // 不清 hoverId，节点持续高亮
         }
       } else if (touchPoints.size === 0) {
         downAt.active = false;
       }
+      clearHoverAt();
       return;
     }
     // ---------- 鼠标 / 触控笔：原逻辑 ----------
