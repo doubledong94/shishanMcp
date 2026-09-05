@@ -625,9 +625,10 @@ function updateEdgeBuffers() {
       eColArr[(o + 1) * 3] = _EDGE_C1.r; eColArr[(o + 1) * 3 + 1] = _EDGE_C1.g; eColArr[(o + 1) * 3 + 2] = _EDGE_C1.b;
       eColArr[(o + 2) * 3] = _EDGE_C1.r; eColArr[(o + 2) * 3 + 1] = _EDGE_C1.g; eColArr[(o + 2) * 3 + 2] = _EDGE_C1.b;
     }
-    // alpha：顶点0,3=起点 alpha，1,2=终点 alpha（对齐旧 FlowLine，端点选中则不透明、未选中半透明）
-    const aFrom = nodeAlphaFor(e.from);
-    const aTo = nodeAlphaFor(e.to);
+    // alpha：顶点0,3=起点 alpha，1,2=终点 alpha（对齐旧 FlowLine，端点选中则不透明、未选中半透明）。
+    // 维度着色时强制不透明：半透明会把维度色压暗淡、与图例色块不一致。
+    const aFrom = dimEdgeOn ? 1.0 : nodeAlphaFor(e.from);
+    const aTo = dimEdgeOn ? 1.0 : nodeAlphaFor(e.to);
     eAlphaArr[o + 0] = aFrom; eAlphaArr[o + 3] = aFrom;
     eAlphaArr[o + 1] = aTo;   eAlphaArr[o + 2] = aTo;
   }
