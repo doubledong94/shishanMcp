@@ -489,6 +489,8 @@ function makeLabel(text) {
 // 对齐旧项目：边 transparent+depthTest=false，与节点同处透明 pass，节点 renderOrder=1 更后画 → 圆盘盖住边。
 const EDGE_CAP = 20000; // 预分配容量（对齐旧 FlowLine::edgeCapacity）
 const EDGE_HALF_WIDTH = 0.7; // 每侧半宽；总宽 ≈ 2*half（比原值减半）
+// 缺口顶角 60°：由"半底宽 / 高 = tan(30°)"得 高 = 半底宽 / tan(30°)。使缺口世界高度恒定 → 各边顶角一致。
+const EDGE_NOTCH_WORLD_H = EDGE_HALF_WIDTH / Math.tan(Math.PI / 6);
 const EDGE_INSET = 0.9; // 边端点按节点半径内缩的比例(≈圆盘边缘，避免伸进中心 z-fighting)
 
 const EDGE_VERT = `
@@ -498,25 +500,30 @@ attribute vec3 edgeColor;
 attribute vec2 edgeUv;
 attribute float edgeFlow;
 attribute float edgeAlpha;
+attribute float edgeNotch;
 uniform float lineHalfWidth;
 uniform vec3 camDir;
 varying vec2 vUv;
 varying vec3 vColor;
 varying float vFlow;
 varying float vAlpha;
+varying float vNotch;
 void main() {
   vUv = edgeUv;
   vColor = edgeColor;
   vFlow = edgeFlow;
   vAlpha = edgeAlpha;
+  vNotch = edgeNotch;
   vec3 nd = normalize(cross(edgeDir, camDir) + vec3(1e-5));
   gl_Position = projectionMatrix * modelViewMatrix * vec4(edgePos + nd * lineHalfWidth, 1.0);
 }`;
 const EDGE_FRAG = `
+#define EDGE_NOTCH_WIDTH 1.0  // 缺口底宽 = 线宽(全宽)，朝 to 收窄成尖
 varying vec2 vUv;
 varying vec3 vColor;
 varying float vFlow;
 varying float vAlpha;
+varying float vNotch;
 void main() {
   vec3 color = vColor;
   // 流光：vFlow > -1.5 时画一段移动暗带（对齐旧 FlowLine）
@@ -524,12 +531,20 @@ void main() {
     float f = 0.8 * smoothstep(0.2, 0.0, abs(vFlow));
     color -= vec3(f);
   }
+  float a = vAlpha;
+  // vNotch=该边缺口(uv)长度,使缺口/尖点世界高度恒定 → 各边顶角一致(60°)。
+  // from 端三角缺口：底口=线宽、朝 to 收窄。
+  float notchRel = 1.0 - (vUv.y + 1.0) / max(vNotch, 0.0001); // 起点=1 → 缺口末端=0
+  if (notchRel > 0.0 && abs(vUv.x) < notchRel * EDGE_NOTCH_WIDTH) a = 0.0;
+  // to 端削尖成 60° 尖点：中心保留、两侧宽度线性收窄到 to 端点。
+  float toRel = (vUv.y - (1.0 - vNotch)) / max(vNotch, 0.0001); // 起削点=0 → to 端=1
+  if (toRel > 0.0 && abs(vUv.x) > (1.0 - toRel)) a = 0.0;
   // 边 alpha 随端点选中/悬停（顶点0,3=起点 alpha，1,2=终点 alpha），对齐旧 FlowLine
-  gl_FragColor = vec4(color, vAlpha);
+  gl_FragColor = vec4(color, a);
 }`;
 
 let edgeGeo = null; // 动态 BufferGeometry（容量预分配，写入活跃边的 4 顶点）
-let ePosArr = null, eDirArr = null, eColArr = null, eUvArr = null, eFlowArr = null, eAlphaArr = null;
+let ePosArr = null, eDirArr = null, eColArr = null, eUvArr = null, eFlowArr = null, eAlphaArr = null, eNotchArr = null;
 
 function rebuildEdges() {
   const edges = state.edges.filter((e) => nodePos.has(e.from) && nodePos.has(e.to));
@@ -551,6 +566,7 @@ function rebuildEdges() {
   eUvArr = new Float32Array(V * 2);
   eFlowArr = new Float32Array(V).fill(-2); // -2 = 无流光
   eAlphaArr = new Float32Array(V).fill(0.3); // 边 alpha：默认未选中 0.3，随端点选中更新
+  eNotchArr = new Float32Array(V).fill(0.2); // 缺口 uv 长度(per-edge，updateEdgeBuffers 按边长重算)
   // uv：每边 (-1,-1),(-1,1),(1,1),(1,-1)
   for (let i = 0; i < cap; i++) {
     const b = i * 4;
@@ -565,6 +581,7 @@ function rebuildEdges() {
   edgeGeo.setAttribute("edgeUv", new THREE.BufferAttribute(eUvArr, 2));
   edgeGeo.setAttribute("edgeFlow", new THREE.BufferAttribute(eFlowArr, 1));
   edgeGeo.setAttribute("edgeAlpha", new THREE.BufferAttribute(eAlphaArr, 1));
+  edgeGeo.setAttribute("edgeNotch", new THREE.BufferAttribute(eNotchArr, 1));
   const idx = new Uint32Array(cap * 6);
   for (let i = 0; i < cap; i++) {
     const b = i * 4, o = i * 6;
@@ -603,6 +620,10 @@ function updateEdgeBuffers() {
     const dx = b.x - a.x, dy = b.y - a.y, dz = b.z - a.z;
     const len = Math.hypot(dx, dy, dz) || 1e-6;
     const ux = dx / len, uy = dy / len, uz = dz / len;
+    // 缺口/尖点在 uv 里的长度：uv.y 全长 2 对应 len，故 = 2*世界高/len，使世界高度恒定(顶角 60°)。
+    // 上限 0.45：极短边不把整段剖没(此时角度会大于 60°,属合理退化)。
+    const notchUv = Math.min((2 * EDGE_NOTCH_WORLD_H) / len, 0.45);
+    eNotchArr[o + 0] = notchUv; eNotchArr[o + 1] = notchUv; eNotchArr[o + 2] = notchUv; eNotchArr[o + 3] = notchUv;
     const ra = (nodeScale.get(e.from) || 1) * EDGE_INSET;
     const rb = (nodeScale.get(e.to) || 1) * EDGE_INSET;
     const aax = a.x + ux * ra, aay = a.y + uy * ra, aaz = a.z + uz * ra;
@@ -645,6 +666,7 @@ function updateEdgeBuffers() {
   edgeGeo.attributes.edgeDir.needsUpdate = true;
   edgeGeo.attributes.edgeColor.needsUpdate = true;
   edgeGeo.attributes.edgeAlpha.needsUpdate = true;
+  edgeGeo.attributes.edgeNotch.needsUpdate = true;
 }
 
 const _EDGE_C0 = new THREE.Color();
