@@ -85,7 +85,7 @@
 | 特殊字符 | 旧语义 | 新项目图模式                                      |
 | --- | --- |---------------------------------------------|
 | `Condition` | 条件分支节点 | `(:Condition)`                              |
-| `Else` | else 分支链 | `(:Condition)-[:ELSE]->(:Condition)`        |
+| `Else` | else 分支入口(逻辑标记) | `(:Condition)-[:ELSE]->(:Condition{kind:'ELSE'})`(再经 NEXT 进入 else 体) |
 | `Reference` | 实例引用访问成员 | `(:Value)-[:REF]->(:CalledMethod\|:Value)`  |
 | `Index` | 数组访问 | `(:Value)-[:INDEX]->(:Value{kind:'INDEX'})` |
 | `DataStep` / `TimingStep` | 数据/时机步进 | 已并入 `FLOWS` / `CALLS` 关系（不物化节点）             |
@@ -284,6 +284,6 @@ RETURN p LIMIT 20
 | 类范围（super/sub/inPackage） | ✅ `ancestors`/`descendants`/`inPackage` preset（需 param） |
 | 多态 override 搜索 | ✅ `polymorphism` preset（OVERRIDES） |
 | 时序主轴（时机） | ✅ `codeorder` preset（NEXT 边） |
-| 时序主轴 × 逻辑配合 | ✅ `order_true`/`order_false` preset：经 CONTROLS 找条件，走 then(NEXT)/else(ELSE) 链 |
+| 时序主轴 × 逻辑配合 | ✅ `order_true`/`order_false` preset：经 CONTROLS 找条件，走 then(NEXT) / else 的 ELSE 节点再经 NEXT 链 |
 | 排除（exclude*） | ⚠️ 可作为查询参数 |
 | 正则 FA 引擎 | ❌ 不移植（cypher 原生支持路径模式） |

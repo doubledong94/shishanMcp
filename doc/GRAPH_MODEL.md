@@ -100,7 +100,7 @@ NEO4J_DATABASE  # 可选
 | `(:Value)-[:CONTROLS]->(:Condition)` | 条件变量守卫哪个分支 | `toConditionValue→conditionItem` |
 | `(:Value)-[:REF]->(:CalledMethod)` | 数据的分形：实例引用访问成员 | Reference |
 | `(:Value\|:CalledMethod\|:Condition)-[:NEXT]->(...)` | 时机（时序主轴）：事件级链，块尾接到块外后续、函数尾跨函数接到调用点。**所有运行时 value 事件都入链**（函数体直排 value、实参列表/条件表达式内部读取、实参槽 CALLED_PARAM、嵌套调用 CALLED_RETURN、索引元素 INDEX、返回 RETURN），保证 method↔value、value↔value 时序连续、节点不孤立；实参槽在调用点按执行序入链（`...→实参求值→实参槽→调用→返回→...`） | `codeOrder(Mk, S, D)` |
-| `(:Condition)-[:NEXT]->(then首事件)` / `(:Condition)-[:ELSE]->(else首事件)` | 分支入口：then 走 NEXT（条件为 true）、else 走 ELSE（条件为 false）；守卫表达式经 `CONTROLS` 查询 | `toConditionValue→conditionItem` + 分支结构 |
+| `(:Condition)-[:NEXT]->(then首事件)` / `(:Condition)-[:ELSE]->(:Condition{kind:'ELSE'})-[:NEXT]->(else首事件)` | 分支入口：then/else 首事件都经 **NEXT** 进入顺序链（else 先到 kind=ELSE 条件节点、再经 NEXT 进入 else 体）；`ELSE` 边只作"条件 --ELSE--> ELSE节点"的逻辑标记；守卫表达式经 `CONTROLS` 查询 | `toConditionValue→conditionItem` + 分支结构 |
 
 ### 3.3 属性
 
