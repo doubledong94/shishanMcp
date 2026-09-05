@@ -90,10 +90,7 @@ NEO4J_DATABASE  # 可选
 | `(:Method)-[:ROOT]->(:Condition)` | 方法根分支 | 方法 conditionItem |
 | `(:Condition)-[:SUB]->(:Condition)` | 分支嵌套 | super→sub condition |
 | `(:Condition)-[:ELSE]->(:Condition)` | else 分支链 | Condition→Else→Condition |
-| `(:Condition)-[:LEADS_TO]->(:CalledMethod)` | 分支通往的调用 | condition→calledMethod |
 | `(:CalledMethod)-[:CALLS]->(:Method)` | 调用点解析到被调方法声明 | calledMethod→TimingStep→method |
-| `(:Condition)-[:LEADS_TO]->(:Value)` | 运行时 Value 节点锚定所属分支/方法根（数据作用域） | addTimingFlow：item→conditionItem |
-| `(:Condition)-[:LEADS_TO]->(:CalledMethod)` | 调用点锚定到其包围分支/方法根（恒发，含顶层 body；分支定位靠 Condition.kind） | 调用点归属 |
 | `(:Value)-[:ARG_OF]->(:CalledMethod)` | 实参属于哪个调用点 | calledParamToCalledReturn 等 |
 | `(:Value)-[:RET_OF]->(:CalledMethod)` | 返回值使用属于哪个调用点 | 同上 |
 | `(:Value)-[:FLOWS]->(:Value)` | 数据流（赋值/读写/传参/返回值） | `flow(Mk, S, D)` |
@@ -118,7 +115,7 @@ NEO4J_DATABASE  # 可选
 
 ### 4.1 为什么方法上下文可以不落库
 
-跨方法的数据流必然穿过 called-instance（传参 `calledParam→param`、返回值 `return→calledReturn`），在**方法边界**处数据轴（FLOWS）与时序轴（经调用分形 CALLS 接入的 NEXT）天然相交于同一枢纽。方法内数据流给出归属的方式：**Value 节点与调用点统一经 `LEADS_TO`**（Condition→节点，恒发）连到所在条件/方法根 → 条件树 → Method。前提：**每个 Value 节点都必须 `LEADS_TO` 一个分支**（旧 `addTimingFlow` 正是把全部 item 连到所在块 condition），否则远离调用边界的数据流节点无法找回方法。
+跨方法的数据流必然穿过 called-instance（传参 `calledParam→param`、返回值 `return→calledReturn`），在**方法边界**处数据轴（FLOWS）与时序轴（经调用分形 CALLS 接入的 NEXT）天然相交于同一枢纽。方法内数据流给出归属的方式：**Value 节点与调用点统一经 `NEXT` 链**（Condition 沿 NEXT 遍历即可到达其块内含的全部运行时节点）归到所在条件/方法根 → 条件树 → Method。前提：**每个运行时节点都入 NEXT 顺序链**，否则远离调用边界的数据流节点无法找回方法。
 
 ## 5. 旧 prolog → Neo4j 映射
 
@@ -165,7 +162,7 @@ Neo4j 只支持二元关系，n 元谓词统一用三种方式降维：
 
 | 原事实 | 元数 | 转换 |
 | --- | --- | --- |
-| `runtimeKey(Mk, Key, RK, KeyType)` | 4 | 节点 `{key, kind}` + `LEADS_TO` 边（锚定所属条件） |
+| `runtimeKey(Mk, Key, RK, KeyType)` | 4 | 节点 `{key, kind}`（经 NEXT 链归到所属条件） |
 | `runtimeRead(Mk, V, RK)` / `runtimeWrite(Mk, V, RK)` | 3 | 节点 `{read, write}` 布尔属性，RK↔V 的流动由 FLOWS 承载 |
 
 ## 6. 搜索方向 → cypher 模板（草案）
@@ -174,7 +171,7 @@ Neo4j 只支持二元关系，n 元谓词统一用三种方式降维：
 
 **调用（时机的分形）：** `android.view.View` 内部的调用栈
 ```cypher
-MATCH (m:Method)-[:ROOT]->(:Condition)-[:SUB*0..]->(c)-[:LEADS_TO]->(cm:CalledMethod)-[:CALLS]->(m2:Method)
+MATCH (m:Method)-[:ROOT]->(:Condition)-[:SUB*0..]->(c)-[:NEXT*1..8]->(cm:CalledMethod)-[:CALLS]->(m2:Method)
 WHERE m.name CONTAINS "View"
 RETURN m, c, cm, m2
 ```
@@ -187,7 +184,7 @@ RETURN p, v
 
 **逻辑控制：** `mViewFlags` 控制了哪些调用
 ```cypher
-MATCH (f:Value {name:"mViewFlags"})-[:CONTROLS]->(:Condition)-[:LEADS_TO]->(cm:CalledMethod)
+MATCH (f:Value {name:"mViewFlags"})-[:CONTROLS]->(:Condition)-[:NEXT*1..8]->(cm:CalledMethod)
 RETURN f, cm
 ```
 

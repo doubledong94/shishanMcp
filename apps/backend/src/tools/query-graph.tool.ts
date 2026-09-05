@@ -12,24 +12,6 @@ import { mountedProjectList, mountedProjectsHint } from "./mounted-projects";
  * $project 由后端注入；需要额外输入（类名/包名）的模板用 $name（来自 param 参数）。
  */
 const PRESETS: Record<string, { description: string; needsParam: boolean; cypher: string }> = {
-  calls: {
-    description: "调用图：方法→分支→调用点→被调方法（时序经调用分形跨函数展开）",
-    needsParam: false,
-    cypher:
-      "MATCH (m:Method {projectId:$project})-[:ROOT]->(:Condition)-[:SUB*0..]->(c:Condition)-[:LEADS_TO]->(cm:CalledMethod)-[:CALLS]->(callee:Method) RETURN m, c, cm, callee LIMIT 500",
-  },
-  callers: {
-    description: "被调方法的所有调用方（谁调用了我）",
-    needsParam: false,
-    cypher:
-      "MATCH (m:Method {projectId:$project})-[:ROOT]->(rc:Condition)-[:LEADS_TO]->(cm:CalledMethod)-[:CALLS]->(callee:Method) RETURN DISTINCT m, cm, callee LIMIT 500",
-  },
-  branches: {
-    description: "所有分支及其通往的调用（逻辑控制）",
-    needsParam: false,
-    cypher:
-      "MATCH (c:Condition {projectId:$project})-[:LEADS_TO]->(cm:CalledMethod)-[:CALLS]->(m:Method) RETURN c, cm, m LIMIT 500",
-  },
   nesting: {
     description: "数据的分形：实例引用→调用点",
     needsParam: false,
@@ -41,12 +23,6 @@ const PRESETS: Record<string, { description: string; needsParam: boolean; cypher
     needsParam: false,
     cypher:
       "MATCH (a:Value {projectId:$project})-[:FLOWS*1..6]->(b:Value) RETURN a, b LIMIT 500",
-  },
-  controls: {
-    description: "条件控制：哪些值守卫了哪些分支",
-    needsParam: false,
-    cypher:
-      "MATCH (v:Value {projectId:$project})-[:CONTROLS]->(c:Condition)-[:LEADS_TO]->(cm:CalledMethod) RETURN v, c, cm LIMIT 500",
   },
   types: {
     description: "类继承关系（EXTENDS）",

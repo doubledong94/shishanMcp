@@ -11,7 +11,7 @@
 改了以下任一地方后，旧 Neo4j 数据不反映新逻辑，必须重索引：
 
 - `scip-java` fork 里 **生成节点/边** 的逻辑（`GraphExtractor.java`、`GraphModel.java`、`Neo4jGraphWriter.java` 等）；
-- 想要让 `CALLS` / `LEADS_TO` / 依赖占位节点 等关系按新规则重建。
+- 想要让 `CALLS` / `NEXT` / 依赖占位节点 等关系按新规则重建。
 
 > 纯查询层改动（比如 `query-graph.tool.ts` 的 preset、前端）**不需要**重索引，只重建部署即可。
 
@@ -79,10 +79,10 @@ curl -s -X POST http://localhost:18081/api/run/generate_scip_index \
 
 ### ⑥ 验证新逻辑生效（用针对你改动的查询）
 
-例如合并 SCIP_BY→LEADS_TO 后验证：
+例如验证「运行时节点是否经 NEXT 链归档」：
 
 ```sql
-MATCH (:Condition)-[:LEADS_TO]->(n) RETURN labels(n)[0] AS k, count(*)   -- 调用 + Value 都走统一锚定边
+MATCH (:Condition)-[:NEXT*1..8]->(n) RETURN labels(n)[0] AS k, count(*)   -- 调用 + Value 经 NEXT 链归档
 MATCH (:CalledMethod)-[:CALLS]->(:Method) RETURN count(*)                -- 应约 5.6 万
 ```
 

@@ -830,8 +830,8 @@ const EDGE_DIM_OF = {
   FLOWS: "data",
   // 数据的分形：访问成员 / 数组下标（结构自相似嵌套）
   REF: "dataFractal", REFERENCES: "dataFractal", INDEX: "dataFractal",
-  // 逻辑：条件树（独立维度，ROOT/SUB/ELSE 骨架 + CONTROLS 进入 + LEADS_TO 出口）
-  ROOT: "logic", SUB: "logic", ELSE: "logic", CONTROLS: "logic", LEADS_TO: "logic",
+  // 逻辑：条件树（独立维度，ROOT/SUB/ELSE 骨架 + CONTROLS 进入）；运行时节点由 NEXT 链归档，不再用 LEADS_TO 锚定
+  ROOT: "logic", SUB: "logic", ELSE: "logic", CONTROLS: "logic",
 };
 /** 按 sRGB 十六进制构色，跳过 ColorManagement 的 sRGB→线性转换。
  *  本应用边用自定义 ShaderMaterial 原样输出颜色，若 new THREE.Color(0x…) 把它转成线性，

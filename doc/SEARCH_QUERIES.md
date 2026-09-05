@@ -30,7 +30,7 @@ curl -s -X POST http://localhost:18081/api/run/query_graph \
 定位一个高层函数后，把它的整个调用链（含分支/占用）在调用（时序轴的"分形"）维度展开——**不显示 Value（数据）节点**。
 
 ```cypher
-MATCH p=(m:Method)-[:ROOT|LEADS_TO|CALLS*1..60]->(x)
+MATCH p=(m:Method)-[:ROOT|CALLS*1..60]->(x)
 WHERE m.name='intercept'
   AND coalesce(m.file, m.filePath) CONTAINS 'CallServerInterceptor'
   AND NOT x:Value
@@ -38,7 +38,7 @@ RETURN p LIMIT 2000
 ```
 
 - 起点 `m`：`name` + 文件过滤，精确锚定某个类里的同名方法（okhttp 有多个 `Interceptor.intercept`）。
-- 变长 `[:ROOT|LEADS_TO|CALLS*1..60]`：ROOT（方法→根条件）→ LEADS_TO（条件→运行时节点）→
+- 变长 `[:ROOT|CALLS*1..60]`：ROOT（方法→根条件）→ NEXT（条件→块内运行时节点）→
   CALLS（调用点→被调方法），三种边混着走、最多 60 跳，形成"从 intercept 向外扩散的调用闭包"。
 - `NOT x:Value`：路径终点不是数据节点，所以返回的只有 `Method / CalledMethod / Condition` 三类。
 - 实测（CallServerInterceptor.intercept）：`1 起点 + 30 Method + 36 CalledMethod + 25 Condition = 91 节点`。

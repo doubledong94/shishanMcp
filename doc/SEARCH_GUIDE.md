@@ -43,7 +43,7 @@
 | 谓词 | 方向 | 图关系 | 新项目等价 |
 | --- | --- | --- | --- |
 | `forwardDataStep/backwardDataStep` | 数据流动 | `flow(methodKey, Src, Dst)` 里 src/dst 间跨越 step | `(:Value)-[:FLOWS]->(:Value)` |
-| `forwardTimingStep/backwardTimingStep` | 时机传递 | calledMethod→step→method | `(:CalledMethod)-[:CALLS]->(:Method)`（+ ROOT/LEADS_TO 锚定方法） |
+| `forwardTimingStep/backwardTimingStep` | 时机传递 | calledMethod→step→method | `(:CalledMethod)-[:CALLS]->(:Method)`（+ ROOT/NEXT 锚定方法） |
 | `forwardDataOverride/backwardDataOverride` | 数据多态 | 覆写方法的参数/返回值流 | 暂用 `OVERRIDES` + 跨方法绑定组合 |
 | `forwardTimingOverride/backwardTimingOverride` | 调用多态 | 抽象调用分发到实现 | `(:CalledMethod)-[:CALLS]->(:Method)` + `(:Method)-[:OVERRIDES]->(:Method)` |
 
@@ -71,12 +71,12 @@
 | `Instance` | `nodeInstanceOf(ClassScope, Class, Instance)` | 类型为 C 的字段/参数/返回 | 类型在声明属性（`Field.type`/`Value`）或 `TYPED_BY` 边 |
 | `Parameter` | `nodeParameterOf(Method, Param)` | 方法形参 | `MATCH (:Method{...})-[:HAS_PARAM]->(p:Value{kind:'PARAM'})` |
 | `Return` | `nodeReturnOf(Method, Return)` | 方法返回值 | 方法返回值槽：`(:Value{kind:'RETURN'})`（`RETURNS` 边） |
-| `CalledMethod` | `nodeCalledMethodOf(Method, CM)` | 方法内的调用点 | `MATCH (:Method{...})-[:ROOT]->(:Condition)-[:LEADS_TO]->(:CalledMethod)` |
+| `CalledMethod` | `nodeCalledMethodOf(Method, CM)` | 方法内的调用点 | `MATCH (:Method{...})-[:ROOT]->(:Condition)-[:NEXT*1..8]->(:CalledMethod)` |
 | `CalledParam` | `nodeCalledParameterOf(Param, CP)` | 实参槽 | `MATCH (:Value{kind:'CALLED_PARAM'})-[:ARG_OF]->(:CalledMethod)` |
 | `CalledReturn` | `nodeCalledReturnOf(Return, CR)` | 返回使用槽 | `MATCH (:Value{kind:'CALLED_RETURN'})` |
 | `MethodUse` | `nodeMethodUse(Method, MethodUse)` | 方法调用了谁 | 经 `CalledMethod-[:CALLS]->(:Method)` 推导 |
 | `FieldUse` | `nodeFieldUsedBy(Method, FieldUsedBy)` | 方法用了哪些字段 | 经 `REF`/`FLOWS` 推导 |
-| `MethodUsedBy` | `nodeMethodUsedBy(Method, MethodUsedBy)` | 谁调用了此方法 | `(:Method)<-[:CALLS]-(:CalledMethod)<-[:LEADS_TO]-...` |
+| `MethodUsedBy` | `nodeMethodUsedBy(Method, MethodUsedBy)` | 谁调用了此方法 | `(:Method)<-[:CALLS]-(:CalledMethod)<-[:NEXT*1..8]-...` |
 | `SuperOf/SubOf` | `nodeSuperOf/SubOf(Super, Sub)` | 父子类 | `(:Class)-[:EXTENDS]->(:Class)`（含 `IMPLEMENTS`） |
 | `Union/Intersection/Difference` | `nodeUnion/Intersection/Difference(N1,N2,N)` | 节点集合运算 | cypher `UNION` / 双 MATCH 交集 / `WHERE NOT` |
 
@@ -158,9 +158,9 @@ MATCH (:Method{name:$m})-[:CALLS]<-[:CALLS]-(:CalledMethod)-[:ARG_OF]<-
 
 | 方向（新体系语义） | preset | cypher 核心 |
 | --- | --- | --- |
-| 时机的分形（调用） | `calls` / `callers` | `(:Method)-[:ROOT]->(:Condition)-[:LEADS_TO]->(:CalledMethod)-[:CALLS]->(:Method)` |
+| 时机的分形（调用） | （`calls`/`callers` preset 已删，改用裸查询） | `(:CalledMethod)-[:CALLS]->(:Method)` |
 | 数据 | `dataflow` | `(:Value)-[:FLOWS*1..6]->(:Value)` |
-| 逻辑 | `controls` | `(:Value)-[:CONTROLS]->(:Condition)-[:LEADS_TO]->(:CalledMethod)` |
+| 逻辑 | （`controls`/`branches` preset 已删，改用裸查询） | `(:Value)-[:CONTROLS]->(:Condition)-[:NEXT*1..8]->(:CalledMethod)` |
 | 数据的分形（成员访问） | `nesting` | `(:Value)-[:REF]->(:CalledMethod)-[:CALLS]->(:Method)` |
 | 相交 | 自定义双 MATCH | 两段路径汇聚于同一 `CalledMethod`/`CalledParam` |
 
@@ -176,14 +176,14 @@ MATCH (:Method{name:$m})-[:CALLS]<-[:CALLS]-(:CalledMethod)-[:ARG_OF]<-
 两轴之间如何接续、形成可沿之搜索的闭环（数据驱动分支、分支决定哪些调用、调用把时序切进被调方法）：
 
 ```
-数据 ──CONTROLS──► 逻辑 ──LEADS_TO──► 时机的分形(CALLS 调用) ──跨函数──► 时机(NEXT 主轴，在被调方法内)
+数据 ──CONTROLS──► 逻辑 ──NEXT──► 时机的分形(CALLS 调用) ──跨函数──► 时机(NEXT 主轴，在被调方法内)
 时机 ──(FLOWS推导)──► 数据（被调方法内，写先于读构成数据流，回到数据轴）
 ```
 
 | 步 | 语义 | 边 |
 | --- | --- | --- |
 | 数据 → 逻辑 | bool 表达式的值决定走哪个分支 | `(:Value)-[:CONTROLS]->(:Condition)` |
-| 逻辑 → 时机的分形 | 分支决定哪些调用发生 | `(:Condition)-[:LEADS_TO]->(:CalledMethod)` |
+| 逻辑 → 时机的分形 | 分支决定哪些调用发生 | `(:Condition)-[:NEXT*1..8]->(:CalledMethod)` |
 | 时机的分形 → 时机 | 调用把被调方法的执行插入其自身的时序主轴 | `(:CalledMethod)-[:NEXT]->被调首事件 ... ->return槽-[:NEXT]->(:CalledReturn)-[:NEXT]->调用者后续` |
 | 时机 → 数据 | 写先于读才可达，末写→读构成数据流 | `FLOWS`（由执行时序推导） |
 
@@ -191,7 +191,7 @@ MATCH (:Method{name:$m})-[:CALLS]<-[:CALLS]-(:CalledMethod)-[:ARG_OF]<-
 
 ```cypher
 // 从数据出发：一个值一路影响 逻辑→调用(时机的分形)→被调方法内的时序(NEXT 主轴)→数据
-MATCH p=(v:Value)-[:CONTROLS]->(c:Condition)-[:LEADS_TO]->(cm:CalledMethod)
+MATCH p=(v:Value)-[:CONTROLS]->(c:Condition)-[:NEXT*1..8]->(cm:CalledMethod)
       -[:NEXT]->(calleeFirst)-[:NEXT*1..5]->(calleeExit)-[:NEXT]->(cr:CalledReturn)-[:NEXT]->(callerNext:Value)
 WHERE v.id=$dataId
 RETURN p LIMIT 20
@@ -208,34 +208,34 @@ RETURN p LIMIT 20
 | 轴 | 维度 | 核心/骨架边 | 入口边 | 出口边 | preset |
 | --- | --- | --- | --- | --- | --- |
 | 时序轴 | **时机（主轴）** | 事件链 `(X)-[:NEXT]->(Y)` | `(:Condition)-[:NEXT]->(then首事件)` | 函数尾 `NEXT` 跳回调用者：`(:CalledMethod)-[:NEXT]->被调首事件…-[:NEXT]->(:CalledReturn)-[:NEXT]->调用者后续` | `codeorder` |
-| 时序轴 | **时机的分形（调用）** | `(:CalledMethod)-[:CALLS]->(:Method)` | `(:Condition)-[:LEADS_TO]->(:CalledMethod)`、`(:Value)-[:ARG_OF/RET_OF]->(:CalledMethod)` | — | `calls`/`callers` |
+| 时序轴 | **时机的分形（调用）** | `(:CalledMethod)-[:CALLS]->(:Method)` | `(:Condition)-[:NEXT*1..8]->(:CalledMethod)`、`(:Value)-[:ARG_OF/RET_OF]->(:CalledMethod)` | — | `calls`/`callers` |
 | 数据轴 | **数据（主轴）** | `(:Value)-[:FLOWS]->(:Value)` | — | 进出调用：`(:Value)-[:ARG_OF]->(:CalledMethod)`、`(:Value)-[:RET_OF]->(:CalledMethod)` | `dataflow` |
 | 数据轴 | **数据的分形（成员访问/下标）** | `(:Value)-[:REF]->(:CalledMethod\|:Value)`、`(:Value)-[:INDEX]->(:Value{kind:'INDEX'})` | — | — | `nesting` |
-| — | **逻辑** | 条件树：`(:Method)-[:ROOT]->(:Condition)`、`(:Condition)-[:SUB]->(:Condition)`、`(:Condition)-[:ELSE]->(:Condition)` | `(:Value)-[:CONTROLS]->(:Condition)` | `(:Condition)-[:LEADS_TO]->(:CalledMethod)` | `controls` |
+| — | **逻辑** | 条件树：`(:Method)-[:ROOT]->(:Condition)`、`(:Condition)-[:SUB]->(:Condition)`、`(:Condition)-[:ELSE]->(:Condition)` | `(:Value)-[:CONTROLS]->(:Condition)` | `(:Condition)-[:NEXT*1..8]->(:CalledMethod)` | `controls` |
 
 - **时机（主轴）**：核心 `NEXT` 事件链；分支入口 `Condition-[:NEXT]->(then首事件)`；跨函数时被调方法经 `CALLED_RETURN` 把时序接回调用者后续。
-- **时机的分形（调用）**：核心 `CALLS`（CalledMethod→Method）。与逻辑/数据/数据的分形的接缝都在调用点——`LEADS_TO` 从条件进来，实参 `ARG_OF` / 返回 `RET_OF` 让数据进出调用，`REF` 也能引到它。是循环里被多维度汇聚的枢纽。
+- **时机的分形（调用）**：核心 `CALLS`（CalledMethod→Method）。与逻辑/数据/数据的分形的接缝都在调用点——`NEXT` 从条件进来，实参 `ARG_OF` / 返回 `RET_OF` 让数据进出调用，`REF` 也能引到它。是循环里被多维度汇聚的枢纽。
 - **数据（主轴）**：核心 `FLOWS`（Value→Value）；进出调用靠实参/返回槽。
 - **数据的分形（成员访问/下标）**：核心 `REF`（实例→成员/调用）+ `INDEX`（数组访问）。数据在结构层的自相似递归。
-- **逻辑**：内部骨架是**条件树**（`ROOT` 根分支、`SUB` 分支嵌套、`ELSE` else 链）。入口 `CONTROLS`（守卫值→分支），出口 `LEADS_TO`（分支→触发调用点），据此交接到时序轴的 `CALLS`。`Condition↔Condition` 走 `SUB`/`ELSE`，不是 `CALLS`/`LEADS_TO`/`CONTROLS`/`FLOWS`。
+- **逻辑**：内部骨架是**条件树**（`ROOT` 根分支、`SUB` 分支嵌套、`ELSE` else 链）。入口 `CONTROLS`（守卫值→分支），出口 `NEXT`（分支→触发调用点），据此交接到时序轴的 `CALLS`。`Condition↔Condition` 走 `SUB`/`ELSE`，不是 `CALLS`/`NEXT`/`CONTROLS`/`FLOWS`。
 
 ### 11.2 维度两两相交（交点位置决定单/双 MATCH）
 
 每条"可沿之搜索的方向"是一条**有向线**（起点→终点），这里用与边无关的短码标注，方便看位置组合：
-数据 D=`FLOWS`（写→读）、逻辑 L=`CONTROLS→LEADS_TO`（守卫值→调用点）、调用分形 C=`CALLS`（调用点→被调方法，时序轴的递归展开）、时序主轴 A=`NEXT*`（最早→最晚）、成员/下标分形 R=`REF/INDEX`（实例→成员）。
+数据 D=`FLOWS`（写→读）、逻辑 L=`CONTROLS→NEXT`（守卫值→分支经NEXT链到调用点）、调用分形 C=`CALLS`（调用点→被调方法，时序轴的递归展开）、时序主轴 A=`NEXT*`（最早→最晚）、成员/下标分形 R=`REF/INDEX`（实例→成员）。
 > 注：CALLS 与 NEXT 在新体系下同属**时序轴**（分形 / 主轴），但作为两条可分别搜索的方向仍可各自与其他维度相交；表中"C∩A"（原"时机∩顺序"）即一次调用经 NEXT 链接进被调时序——时序轴内部"分形接主轴"。
 
 **规律：一条线的终点/中途接上另一条的起点/中途 → 单 MATCH；两条线在交点同首或同尾 → 双 MATCH。**
 
 | 对 | 交点 | 位置组合 | 单/双 | 查询 |
 | --- | --- | --- | --- | --- |
-| 数据∩逻辑 | 守卫值 v | D**尾** + L**首** | ✅单 | `(d)-[:FLOWS]->(v)-[:CONTROLS]->(c)-[:LEADS_TO]->(cm)` |
+| 数据∩逻辑 | 守卫值 v | D**尾** + L**首** | ✅单 | `(d)-[:FLOWS]->(v)-[:CONTROLS]->(c)-[:NEXT*1..8]->(cm)` |
 | 数据∩调用分形 | 实参槽 cp | D**尾** + C**首** | ✅单 | `(v)-[:FLOWS]->(cp)-[:ARG_OF]->(cm)-[:CALLS]->(m)` |
 | 数据∩时序主轴 | 写a/读b | D 与 A **同首同尾**（两线平行共享两端） | ❌双 | `(a)-[:FLOWS]->(b), (a)-[:NEXT*1..8]->(b)` |
 | 数据∩数据分形 | 值 v / 调用点 cm | v：D**尾**+R**首** ✅单<br>cm：D**尾**+R**尾** ❌双 | 分情形 | 单：`(d)-[:FLOWS]->(v)-[:REF]->(member)`<br>双：`(v1)-[:FLOWS]->(cp)-[:ARG_OF]->(cm), (v2)-[:REF]->(cm)` |
-| 逻辑∩调用分形 | 调用点 cm | L**尾** + C**首** | ✅单 | `(c)-[:LEADS_TO]->(cm)-[:CALLS]->(m)` |
+| 逻辑∩调用分形 | 调用点 cm | L**尾** + C**首** | ✅单 | `(c)-[:NEXT*1..8]->(cm)-[:CALLS]->(m)` |
 | 逻辑∩时序主轴 | 条件 c | L**中** + A**中** | ✅单 | `(v)-[:CONTROLS]->(c)-[:NEXT]->(next)` |
-| 逻辑∩数据分形 | 调用点 cm | L**尾** + R**尾** | ❌双 | `(c)-[:LEADS_TO]->(cm), (v)-[:REF]->(cm)` |
+| 逻辑∩数据分形 | 调用点 cm | L**尾** + R**尾** | ❌双 | `(c)-[:NEXT*1..8]->(cm), (v)-[:REF]->(cm)` |
 | 时序主轴∩调用分形 | 调用点 cm | A**中** + C**首** | ✅单 | `(prev)-[:NEXT]->(cm)-[:CALLS]->(m)` |
 | 调用分形∩数据分形 | 调用点 cm | R**尾** + C**首** | ✅单 | `(v)-[:REF]->(cm)-[:CALLS]->(m)`（成员访问引到调用点并入时序） |
 | 时序主轴∩数据分形 | 实例 v | A**中** + R**首** | ✅单 | `(prev)-[:NEXT]->(v)-[:REF]->(member)` |
@@ -266,11 +266,11 @@ RETURN p LIMIT 20
 | --- | --- | --- |
 | `ARG_OF` | `Value`（CALLED_PARAM）→`CalledMethod` | 实参进出调用点——数据维度的接头 |
 | `RET_OF` | `Value`（CALLED_RETURN）→`CalledMethod` | 返回使用进出调用点——数据维度的接头 |
-| `LEADS_TO` | `Condition`→`Value`/`CalledMethod` | 统一锚定边：把运行时 Value（数据作用域）与调用点锚定到其包围条件/方法根（恒发） |
+| `NEXT` | `Condition`→`Value`/`CalledMethod` | 统一锚定边：把运行时 Value（数据作用域）与调用点锚定到其包围条件/方法根（恒发） |
 
 > 结论：两轴维度 = 流动/传递方向（时序轴 `NEXT`/`CALLS`、数据轴 `FLOWS`/`REF`/`INDEX`）+ 独立逻辑（条件树）；
 > 未纳入的或是静态结构与类型层次（`DECLARES`/`HAS_PARAM`/`RETURNS`/`EXTENDS`/`IMPLEMENTS`/`TYPED_BY`/`OVERRIDES`）——
-> 为维度提供节点集合与类型信息，或是维度交接的接头/锚（`ARG_OF`/`RET_OF`/`LEADS_TO`——运行时节点的条件锚定统一走 `LEADS_TO`）。
+> 为维度提供节点集合与类型信息，或是维度交接的接头/锚（`ARG_OF`/`RET_OF`/`NEXT`——运行时节点的条件锚定统一走 `NEXT`）。
 
 ## 12. 已实现 / 待实现对照
 
