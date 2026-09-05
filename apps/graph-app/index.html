@@ -10,12 +10,19 @@
       #app { position: fixed; inset: 0; }
       canvas { display: block; touch-action: none; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
       .panel {
-        position: fixed; top: 12px; right: 12px; z-index: 10;
+        position: fixed; top: 12px; right: 12px; z-index: 55;
         background: rgba(13,17,23,0.85); border: 1px solid #30363d;
         border-radius: 8px; padding: 12px; width: 300px; font-size: 13px;
         /* 内容（项目/视图下拉、统计、结果、搜索历史、探索…）超出视口时面板内滚动 */
-        max-height: calc(100vh - 24px); overflow-y: auto;
+        /* 用 dvh(动态视口高)而非 100vh：移动端 100vh 含地址栏区域、比真实可见屏幕高，
+           会使面板整块超出屏幕(底部滚不到)。dvh 反映真实可见高度，保证面板被屏幕容纳并可内滚。 */
+        max-height: calc(100vh - 24px); max-height: calc(100dvh - 24px); overflow-y: auto;
+        /* 触摸屏滚动：面板在画布(touch-action:none)之上，显式给面板自身 a pan-y，
+           并阻止滚动串到全屏画布；去掉已废弃且可能干扰 fixed+overflow 触摸滚动的 -webkit-overflow-scrolling */
+        touch-action: pan-y; overscroll-behavior: contain;
       }
+      /* 面板内需要各自滚动的子区也放开触摸平移，避免手势被拦截在子列表而不滚面板 */
+      .panel .history-rows, .panel .result-rows, .panel .locate { touch-action: pan-y; }
       .panel::-webkit-scrollbar { width: 8px; }
       .panel::-webkit-scrollbar-thumb { background: #30363d; border-radius: 4px; }
       .panel::-webkit-scrollbar-thumb:hover { background: #484f58; }
