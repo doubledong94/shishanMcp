@@ -20,6 +20,16 @@
       .panel::-webkit-scrollbar-thumb { background: #30363d; border-radius: 4px; }
       .panel::-webkit-scrollbar-thumb:hover { background: #484f58; }
       .panel h1 { font-size: 15px; margin-bottom: 8px; color: #e6edf3; }
+      /* 右侧整体面板可折叠：点标题收起，仅剩标题栏，让 3D 图占满 */
+      .panel-head {
+        display: flex; align-items: center; gap: 6px; cursor: pointer;
+        user-select: none; margin-bottom: 8px;
+      }
+      .panel-head .caret { display: inline-block; width: 12px; color: #8b949e; font-size: 12px; }
+      .panel-head h1 { margin: 0; flex: 1; }
+      .panel.collapsed { width: auto; padding: 8px 12px; }
+      .panel.collapsed .panel-head { margin-bottom: 0; }
+      .panel.collapsed .panel-body { display: none; }
       .panel label { display: block; margin: 6px 0 3px; color: #8b949e; }
       .panel input, .panel select, .panel textarea {
         width: 100%; background: #161b22; color: #c9d1d9;
@@ -293,8 +303,11 @@
       </div>
     </nav>
 
-    <div class="panel">
-      <h1>代码图谱 3D</h1>
+    <div class="panel" id="panel">
+      <div class="panel-head" id="panel-head" title="点击收起/展开右侧面板">
+        <span class="caret" id="panel-caret">▾</span><h1>图谱控制台</h1>
+      </div>
+      <div class="panel-body" id="panel-body">
       <label for="project">项目</label>
       <select id="project"></select>
       <label for="view">已保存视图</label>
@@ -349,6 +362,7 @@
         右键让边沿流光脉冲级联。选中后可沿方向（数据/调用·时机分形/数据分形/控制/时序·时机）扩展。
       </div>
       <div class="build" id="build"></div>
+      </div>
     </div>
 
     <!-- 节点右键浮动菜单 -->

@@ -2020,6 +2020,28 @@ function initHistoryToggle() {
   if (historyHeadEl) historyHeadEl.addEventListener("click", () => applyHistoryOpen(!historyOpen));
 }
 
+// ---------- 右侧整体面板收起/展开 ----------
+const PANEL_COLLAPSE_KEY = "shishan-panel-collapsed";
+let panelCollapsed = false;
+/** 应用右侧面板折叠态：收起时 .panel 收窄到标题栏、隐藏 .panel-body，并持久化。 */
+function applyPanelCollapsed(collapsed) {
+  panelCollapsed = !!collapsed;
+  const panel = document.getElementById("panel");
+  if (panel) panel.classList.toggle("collapsed", panelCollapsed);
+  const caret = document.getElementById("panel-caret");
+  if (caret) caret.textContent = panelCollapsed ? "▸" : "▾";
+  try { localStorage.setItem(PANEL_COLLAPSE_KEY, panelCollapsed ? "1" : "0"); } catch { /* 忽略 */ }
+}
+function initPanelToggle() {
+  try {
+    const saved = localStorage.getItem(PANEL_COLLAPSE_KEY);
+    if (saved === "1") panelCollapsed = true;
+  } catch { panelCollapsed = false; }
+  applyPanelCollapsed(panelCollapsed);
+  const head = document.getElementById("panel-head");
+  if (head) head.addEventListener("click", () => applyPanelCollapsed(!panelCollapsed));
+}
+
 function selectionLabels() {
   if (selectedIds.size === 0) return "未选中节点";
   if (selectedIds.size === 1) {
@@ -2377,6 +2399,7 @@ async function load() {
 }
 
 initHistoryToggle(); // 恢复搜索历史面板的收起/展开态
+initPanelToggle();   // 恢复右侧整体面板的收起/展开态
 initThree();
 restoreViewToggles(); // 刷新后恢复流色/维度着色模式；换图/同图都会按当前图重算应用
 document.getElementById("build").textContent = `build ${BUILD}`;
