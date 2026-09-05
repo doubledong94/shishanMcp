@@ -341,57 +341,60 @@ const _FLOW_WHITE = new THREE.Color(1, 1, 1);
  * fromTop = max over 各源(入度0) 的"源→节点最短路径边数"，toBottom = max over 各汇(出度0) 的"节点→汇最短路径边数"。
  * 规则同旧 getNodeRelativePosition()：从任何源都不可达(孤立/纯环)→0(黄)；到不了任何汇→1(洋红)；length==0→0。
  */
+/**
+ * 用 Kahn 拓扑剥层算流位置 ratio = fromTop/(fromTop+toBottom)，保证**沿流程单调**（源=黄、汇=洋红，
+ * 中间一层深一层，分支/汇合处不跳色）。此前对齐旧项目 igraph 的 max 最短路在分支点非单调，
+ * 导致"洋红后跟黄"的跳色，这里改回拓扑剥层。
+ * fromTop = 从源头沿出边剥到的层号，toBottom = 从汇沿入边反向剥到的层号。
+ */
 function computeFlowColors() {
   flowColorRatio.clear();
   const ids = state.nodes.map((n) => n.id);
   const nodeSet = new Set(ids);
   if (!ids.length) return;
-  const out = new Map(), inc = new Map();
-  for (const id of ids) { out.set(id, []); inc.set(id, []); }
+  const out = new Map(), inCnt = new Map(); // out: 后继，inCnt: 入度计数
+  for (const id of ids) { out.set(id, []); inCnt.set(id, 0); }
   for (const e of state.edges) {
     if (nodeSet.has(e.from) && nodeSet.has(e.to)) {
       out.get(e.from).push(e.to);
-      inc.get(e.to).push(e.from);
+      inCnt.set(e.to, inCnt.get(e.to) + 1);
     }
   }
-  // 入度 0 = 源（旧 prepareInDegreeMap），出度 0 = 汇；seed 顺序与显示顺序一致，保证稳定。
-  const sources = ids.filter((id) => inc.get(id).length === 0);
-  const sinks = ids.filter((id) => out.get(id).length === 0);
-  const distTop = farthestShortest(out, sources);   // 离"最近源"的路程（不可达则无记录）
-  const distBottom = farthestShortest(inc, sinks);  // 反向算：离"最近汇"的路程
+  const layerFrom = peelLayers(ids, inCnt, out);
+  // 反向：把边倒过来再剥一层，得"离汇多远"
+  const revOut = new Map(), revInc = new Map();
+  for (const id of ids) { revOut.set(id, []); revInc.set(id, 0); }
+  for (const e of state.edges) {
+    if (nodeSet.has(e.from) && nodeSet.has(e.to)) {
+      revOut.get(e.to).push(e.from);
+      revInc.set(e.from, revInc.get(e.from) + 1);
+    }
+  }
+  const layerTo = peelLayers(ids, revInc, revOut);
   for (const id of ids) {
-    const fromTop = distTop.get(id) ?? -1;
-    const toBottom = distBottom.get(id) ?? -1;
-    let ratio;
-    if (fromTop < 0) ratio = 0;
-    else if (toBottom < 0) ratio = 1;
-    else { const len = fromTop + toBottom; ratio = len === 0 ? 0 : fromTop / len; }
-    flowColorRatio.set(id, ratio);
+    const fromTop = layerFrom.get(id) ?? 0;
+    const toBottom = layerTo.get(id) ?? 0;
+    const ratio = fromTop + toBottom === 0 ? 0.5 : fromTop / (fromTop + toBottom);
+    flowColorRatio.set(id, THREE.MathUtils.clamp(ratio, 0, 1));
   }
 }
 
-/** 多源 BFS（单位边权 = 最短路径边数）：从每个 seed 各跑一次取逐节点 max，对齐旧 maxDistanceFromTop/ToBottom。 */
-function farthestShortest(adj, seeds) {
-  const dist = new Map();
-  for (const s of seeds) {
-    const seen = new Map([[s, 0]]);
-    let frontier = [s];
-    while (frontier.length) {
-      const next = [];
-      for (const u of frontier) {
-        const du = seen.get(u) + 1;
-        for (const v of adj.get(u)) {
-          if (!seen.has(v)) { seen.set(v, du); next.push(v); }
-        }
-      }
-      frontier = next;
-    }
-    for (const [v, d] of seen) {
-      const cur = dist.get(v);
-      if (cur === undefined || d > cur) dist.set(v, d);
+/** 拓扑剥层：入度为 0 的节点剥为第 0 层，逐层递增（单调）；环内节点无记录（默认 0）。 */
+function peelLayers(ids, inCountRef, outRef) {
+  const incnt = new Map(inCountRef);
+  const depth = new Map();
+  const q = [];
+  for (const id of ids) if (incnt.get(id) === 0) { q.push(id); depth.set(id, 0); }
+  let qi = 0;
+  while (qi < q.length) {
+    const cur = q[qi++];
+    for (const nb of outRef.get(cur)) {
+      const nu = incnt.get(nb) - 1;
+      incnt.set(nb, nu);
+      if (nu === 0) { depth.set(nb, depth.get(cur) + 1); q.push(nb); }
     }
   }
-  return dist;
+  return depth;
 }
 
 function enableFlowColor() {
@@ -399,6 +402,10 @@ function enableFlowColor() {
   // 对齐旧 flowColor()：默认给所有节点上流色（不覆盖已有指定颜色——当前仅流色，故全加）
   for (const n of state.nodes) flowColored.add(n.id);
   writeFlowStore(graphKey(state.nodes), [...flowColored]); // 按当前图记住着色
+  // 自动上色会让"节点与边统一流色"，关掉维度着色，避免边仍按维度分色。
+  if (dimEdgeOn) { dimEdgeOn = false; persistViewToggles(); }
+  const st = document.getElementById("dim-state");
+  if (st) st.textContent = dimEdgeOn ? "维度着色：开" : "维度着色：关";
   applyHighlights();
 }
 /** 对齐旧 clearSpecifiedColor()（Ctrl+Alt+H）：清除未选中节点的颜色，选中的保留。 */
@@ -610,7 +617,8 @@ function updateEdgeBuffers() {
     eDirArr[(o + 2) * 3] = -dx; eDirArr[(o + 2) * 3 + 1] = -dy; eDirArr[(o + 2) * 3 + 2] = -dz;
     eDirArr[(o + 3) * 3] = -dx; eDirArr[(o + 3) * 3 + 1] = -dy; eDirArr[(o + 3) * 3 + 2] = -dz;
     if (dimEdgeOn) {
-      // 按维度平色覆盖（两端同色），区分各轴维度
+      // 按维度平色覆盖（两端同色），区分各轴维度。维度着色只作用于边，不影响节点色；
+      // 自动上色(Ctrl+H)会关掉维度着色，使边也走流色、与节点统一。
       edgeDimColorFor(e.label, _EDGE_C0);
       eColArr[(o + 0) * 3] = _EDGE_C0.r; eColArr[(o + 0) * 3 + 1] = _EDGE_C0.g; eColArr[(o + 0) * 3 + 2] = _EDGE_C0.b;
       eColArr[(o + 3) * 3] = _EDGE_C0.r; eColArr[(o + 3) * 3 + 1] = _EDGE_C0.g; eColArr[(o + 3) * 3 + 2] = _EDGE_C0.b;
@@ -847,9 +855,11 @@ function edgeDimColorFor(label, out) {
 }
 function toggleDimEdges() {
   dimEdgeOn = !dimEdgeOn;
+  // 维度着色只作用于边，不清节点颜色（flowColored 保留，节点仍按其颜色显示）。
   persistViewToggles();
   const st = document.getElementById("dim-state");
   if (st) st.textContent = dimEdgeOn ? "维度着色：开" : "维度着色：关";
+  applyHighlights();
 }
 
 /** 节点当前视觉色（正常模式灰度 / 流上色模式渐变，选中/悬停提亮）。节点与边共用，保证边色随节点色。 */
