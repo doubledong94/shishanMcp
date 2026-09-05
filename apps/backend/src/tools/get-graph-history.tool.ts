@@ -17,7 +17,8 @@ export const GetGraphHistoryToolSpec: ToolSpec = {
   name: "get_graph_history",
   description:
     "只读返回某项目「当前工作图」的叠加搜索历史——这张图依次由哪些搜索语句累加而成" +
-    "（按并入顺序列出，每条含 revision / 实际执行的 cypher / preset / 新增节点边数 / 时间），" +
+    "（按并入顺序列出，每条含 revision / 语义名 name / 实际执行的 cypher / preset / 新增节点边数 / 时间）" +
+    "，name 反映每条「搜了什么」（如 preset 名、查询目标或「扩展 <节点> 沿 <方向>」），" +
     "并附当前图的节点边计数与 revision。在你想基于当前图继续分析前，可先调用它了解这张图的来历。" +
     "可选传 viewId 查看某张已保存快照自己的历史（缺省即当前工作图）。" +
     "当前已挂载项目：" + mountedProjectList(),

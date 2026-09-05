@@ -54,8 +54,21 @@ export interface SearchEntry {
   cypher: string;
   /** 若来自 query_graph 预置模板，记录模板名（无则缺省）。 */
   preset?: string;
+  /** 本次搜索的语义名：反映"搜了什么"，供前端面板展示与 get_graph_history 给 AI 看。
+   *  未显式传时按下述 defaultSearchName 派生（preset 名 / cypher 摘要）。 */
+  name?: string;
   addedNodes?: number;
   addedEdges?: number;
+}
+
+/** 未显式给 name 时派生一个能反映"搜了什么"的默认名。 */
+export function defaultSearchName(preset: string | undefined, cypher: string): string {
+  if (preset) return `preset:${preset}`;
+  const s = String(cypher || "").replace(/\s+/g, " ").trim();
+  // 取第一条含关系/目标的 pattern 作摘要，避免整段 cypher 占面板。
+  const rel = s.match(/\[([^\]]+)\]/) || s.match(/\(([^)]*)\)[\s\S]*?RETURN\s+([^\s]+)/);
+  if (rel) return `查询 ${rel[1].trim().slice(0, 40)}`;
+  return s.slice(0, 40) || "查询";
 }
 
 /** 每张图持久化的 history 上限（超出丢弃最旧）。 */
@@ -154,6 +167,7 @@ export class GraphService {
     cypher: string,
     params: Record<string, unknown> = {},
     preset?: string,
+    name?: string,
   ): Promise<QueryResult> {
     this.assertProject(project);
     const records = await this.neo4j.run(cypher, params, "read");
@@ -164,6 +178,7 @@ export class GraphService {
       view,
       cypher,
       preset,
+      name,
     );
     // 单次查询快照也存"并入后 current 的完整 history"，restore 它即得正确历史起点。
     const viewId = this.saveView(project, view, cypher, history);
@@ -208,6 +223,7 @@ export class GraphService {
     view: GraphView,
     cypher: string,
     preset?: string,
+    name?: string,
   ): { merged: GraphView; addedNodes: number; addedEdges: number; revision: number; history: SearchEntry[] } {
     const cur = this.readCurrent(project);
     const merged = mergeGraphs(cur, view);
@@ -219,6 +235,7 @@ export class GraphService {
       at: new Date().toISOString(),
       cypher,
       preset,
+      name: name || defaultSearchName(preset, cypher),
       addedNodes,
       addedEdges,
     };

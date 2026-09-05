@@ -250,13 +250,14 @@ export class ApiController {
     @Query("project") project?: string,
     @Query("cypher") cypher?: string,
     @Query("id") id?: string,
+    @Query("name") name?: string,
   ) {
     if (!project || !cypher) {
       throw new BadRequestException("需要 project 和 cypher 参数");
     }
     const params: Record<string, unknown> = { project };
     if (id != null) params.id = id;
-    const result = await this.graph.queryGraph(project, cypher, params);
+    const result = await this.graph.queryGraph(project, cypher, params, undefined, name);
     return result.view;
   }
 }

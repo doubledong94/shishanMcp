@@ -1962,6 +1962,12 @@ function renderSearchHistory(history) {
       at.textContent = formatHistoryTime(e.at);
       row.append(at);
     }
+    if (e.name) {
+      const nameEl = document.createElement("div");
+      nameEl.className = "hname";
+      nameEl.textContent = e.name;
+      row.append(nameEl);
+    }
     const cypher = document.createElement("code");
     cypher.className = "cypher";
     cypher.textContent = e.cypher || "(空查询)";
@@ -2157,9 +2163,13 @@ async function expand() {
   const cypher =
     `MATCH (a {id:$id})-[r:${dir}]-(b {projectId:$project}) ` +
     "RETURN a, r, b LIMIT 200";
+  // 自动生成语义名（含节点 label 与方向）写入搜索历史；label 取节点展示名，缺失时退回其 id。
+  const nodeLabel = node ? (node.label || node.name || matchId) : matchId;
+  const searchName = `扩展 ${nodeLabel} 沿 ${dir}`;
   const url =
     `/api/graph/query?project=${encodeURIComponent(project)}` +
-    `&cypher=${encodeURIComponent(cypher)}&id=${encodeURIComponent(matchId)}`;
+    `&cypher=${encodeURIComponent(cypher)}&id=${encodeURIComponent(matchId)}` +
+    `&name=${encodeURIComponent(searchName)}`;
   try {
     const res = await fetch(url);
     if (!res.ok) {

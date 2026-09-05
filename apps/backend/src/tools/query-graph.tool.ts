@@ -132,6 +132,13 @@ export const QueryGraphToolSpec: ToolSpec = {
       .string()
       .optional()
       .describe("合法的 cypher 查询语句，可含 $project / $name 参数。preset 未给时使用"),
+    name: z
+      .string()
+      .optional()
+      .describe(
+        "本次搜索的语义名（说明这次查了什么，展示在搜索历史面板、并经 get_graph_history 返回给你）。" +
+          "不给则后端按 preset 名或 cypher 摘要自动派生。",
+      ),
   }),
 };
 
@@ -147,7 +154,7 @@ export class QueryGraphTool {
     description: QueryGraphToolSpec.description,
     parameters: QueryGraphToolSpec.parameters,
   })
-  async run(input: { project: string; preset?: string; param?: string; cypher?: string }) {
+  async run(input: { project: string; preset?: string; param?: string; cypher?: string; name?: string }) {
     return this.calls.track("query_graph", "mcp", input, () => {
       const params: Record<string, unknown> = { project: input.project };
       if (input.param != null) params.name = input.param;
@@ -156,10 +163,10 @@ export class QueryGraphTool {
         if (tpl.needsParam && input.param == null) {
           return { error: `preset ${input.preset} 需要 param（${tpl.description}）` };
         }
-        return this.graph.queryGraph(input.project, tpl.cypher, params, input.preset);
+        return this.graph.queryGraph(input.project, tpl.cypher, params, input.preset, input.name);
       }
       const cypher = input.cypher || PRESETS.calls.cypher;
-      return this.graph.queryGraph(input.project, cypher, params);
+      return this.graph.queryGraph(input.project, cypher, params, undefined, input.name);
     });
   }
 }
