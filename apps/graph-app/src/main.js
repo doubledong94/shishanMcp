@@ -834,9 +834,9 @@ function srgbHex(hex) {
 }
 const EDGE_DIM_COLOR = {
   timing:        srgbHex(0x56d3e0), // 青(轻) 时机 NEXT（时序主轴，沿用旧"顺序"的青色）
-  timingFractal: srgbHex(0x1678a0), // 深青(重) 时机的分形 CALLS（同族更深，调用=内嵌时序）
+  timingFractal: srgbHex(0x2f9ec4), // 中青(略重) 时机的分形 CALLS（同族稍深，调用=内嵌时序）
   data:          srgbHex(0x2fb95c), // 翠绿   数据 FLOWS（绿家族，暖绿）
-  dataFractal:   srgbHex(0x16866e), // 青玉绿 数据的分形 REF/INDEX（结构纵深，深冷绿）
+  dataFractal:   srgbHex(0x2aa47a), // 中绿(略重) 数据的分形 REF/INDEX（结构纵深）
   logic:         srgbHex(0x2f80ed), // 亮蓝   逻辑 条件树（独立，理性蓝）
   other:         srgbHex(0x8b949e), // 中性灰 未纳入
 };
