@@ -99,6 +99,12 @@ NEO4J_DATABASE  # 可选
 | `(:Value\|:CalledMethod\|:Condition)-[:NEXT]->(...)` | 时机（时序主轴）：事件级链，块尾接到块外后续、函数尾跨函数接到调用点。**所有运行时 value 事件都入链**（函数体直排 value、实参列表/条件表达式内部读取、实参槽 CALLED_PARAM、嵌套调用 CALLED_RETURN、索引元素 INDEX、返回 RETURN），保证 method↔value、value↔value 时序连续、节点不孤立；实参槽在调用点按执行序入链（`...→实参求值→实参槽→调用→返回→...`） | `codeOrder(Mk, S, D)` |
 | `(:Condition)-[:NEXT]->(then首事件)` / `(:Condition)-[:NEXT]->(else首事件)` | 分支入口：then/else 分支首事件都经 **NEXT** 从该条件直接进入顺序链（不物化 kind=ELSE 节点、无 ELSE/SUB 边；else-if 链也经 NEXT 连到其守卫值）；守卫表达式经 `CONTROLS` 查询。**if 条件节点的 NEXT 出边恒为 2（1 真 + 1 假），不多不少**：真路径→then 分支首事件；假路径→else 分支首事件（有 else 兜底，分叉受限，不再多连"整个 if 之后的下一个事件"）/ 下一事件的 fall-through（无 else）。**合并点（分支尾→下一事件）由分支尾承担，不占条件自己的分叉** | `toConditionValue→conditionItem` + 分支结构 |
 
+**NEXT 汇合（merge）规律**：下一个事件（合流点）由 NEXT 从**每条落到底的"叶终端"各汇入 1 条**。叶终端 = 一条走到底的链尾；**分叉条件自身不是叶终端**（它只作叉点，其分支尾才是）。于是：
+- 单层 if-else 退化情形：合流点恰汇入 2 条（真路径终端 + 假路径终端）；
+- **嵌套 if 是某分支的最后一条语句**：该内层 if 在本块内没有"之后的事件"，不单独设合流点，其**两条分支链尾**直接作为所在块的末端上汇到外层合流点（合流点入边数 = 落到底的叶路径数，可 >2）；
+- **有 else 的嵌套 if，其条件永远不是叶终端**，不汇入外层合流点（假路径已交其 else 分支）；**无 else 的嵌套 if，其条件是 fall-through 叶终端**，照常汇入 1 条；
+- `return`/`throw` 等终止的分支不汇入（路径直接退出）。
+
 ### 3.3 属性
 
 节点公共属性：`id`（稳定唯一，`MERGE` 用）、`file`、`line`。声明节点另有 `name`、`type`、`package` 等。数据流/引用的**方向语义由边类型承载**（FLOWS / REF / CONTROLS / CALLS），不再物化中间节点。
