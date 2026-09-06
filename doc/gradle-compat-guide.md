@@ -337,6 +337,26 @@ org.gradle.java.installations.paths=/opt/jdk21,/opt/jdk11
    `Toolchain installation ... does not provide the required capabilities: [JAVA_COMPILER]`
    → 给 `gradle.properties` 加 `org.gradle.java.home=/opt/jdk21`（Gradle 本身跑在 JDK21，
    使 build-logic 的 kotlin-dsl 编译能用上；`org.gradle.java.installations.paths` 在该场景不生效）。
+7. **看是不是 gradle 构建缓存脏条目（导致 Kotlin 模块 0 shard / 索引不全）**：index 后
+   Neo4j 节点数为 0 或明显偏少、日志里 `:okhttp:compileKotlinJvm` 显示 **`FROM-CACHE`**、
+   聚合报大量 `invalid SCIP shard / no such file`。根因：scip 容器的 gradle 构建缓存
+   （bind mount 到 `$DATA_DIR/scip/gradle-home`）**跨次 index 持久化**；scip 插件给 **javac**
+   编译加了 `-randomtimestamp`（参数每次变→缓存键每次变→永不命中→每次重编），但给 **Kotlin**
+   编译（`compileKotlinJvm`）只加了固定的 `-Xplugin:scip-kotlinc` 参数、**没有 randomtimestamp**，
+   缓存键稳定。于是**一旦某次把 Kotlin 模块"无 shard"的编译产物缓存下来，之后每次 index 都
+   FROM-CACHE 恢复它、跳过 scip 插件** → 0 shard → 图不全。
+   排查看日志：
+   ```sh
+   grep -E "> Task :okhttp:(compileKotlinJvm|scipCompileAll)" <build.log>
+   # 若见 "compileKotlinJvm FROM-CACHE" / "scipCompileAll UP-TO-DATE" 即中招
+   ```
+   修复：清掉脏的构建缓存再重跑：
+   ```sh
+   rm -rf "$DATA_DIR/scip/gradle-home/caches/build-cache-1"
+   ```
+   （或给索引构建加 `--no-build-cache` 让它每次真编译，一劳永逸不复用旧产物；代价是每次全量重编。）
+   注意：不要与"改 KMP 插件接线 / 禁用 Kotlin 增量编译"混为一谈——那些是本目录外的错误改动，
+   反而会把 Kotlin 模块的 shard 生产压掉；正确做法是**基线代码 + 清缓存**。
 
 ---
 
