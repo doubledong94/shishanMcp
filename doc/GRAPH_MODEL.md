@@ -109,7 +109,51 @@ NEO4J_DATABASE  # 可选
 
 节点公共属性：`id`（稳定唯一，`MERGE` 用）、`file`、`line`。声明节点另有 `name`、`type`、`package` 等。数据流/引用的**方向语义由边类型承载**（FLOWS / REF / CONTROLS / CALLS），不再物化中间节点。
 
-## 4. 关键设计决策与理由
+## 4. NEXT 时序流(if 分叉与 loop 环)
+
+NEXT 是时序主轴(`粗topic链路`的边)。一个条件(if/loop)处,NEXT 遵循**分叉恒 2 + 汇合按叶终端**的规律;loop 额外形成**环(回边)**。本节只讲 if 与 loop 的 NEXT 流;try/catch/finally、跨函数(call/return)另见 3.2。
+
+### 4.1 if 条件:分叉恒 2,汇合按叶终端
+
+**if 条件节点的 NEXT 出边恒为 2(1 真 + 1 假),不多不少。**
+
+| 情形 | 真路径(1 条) | 假路径(1 条) | 合并点 |
+| --- | --- | --- | --- |
+| 无 else `if(c){A}` | → then 分支首事件 | → **下一事件**(fall-through,条件自身) | 由 then 链尾 + 条件汇入 |
+| 有 else `if(c){A}else{B}` | → then 分支首事件 | → **else 分支首事件**(兜底) | 由 then 链尾 + else 链尾汇入 |
+| else-if 链 | → 本 then 分支首 | → **下个 else-if 的守卫值** | 整链末尾按上两行 |
+
+**汇合(merge)规律**:合流点 = 条件之后的下一事件,由 NEXT 从**每条落到底的叶终端各汇入 1 条**。
+- **分叉条件自身不是叶终端**(只作叉点)——有 else 时条件不汇入,否则多一条假边(`#56→#81` 正因此修正);无 else 时条件作为 fall-through 叶终端汇入 1 条。
+- **嵌套 if 是某分支的最后一条语句**:该 if 在本块内没有"之后的事件",不单独设合流点;其两条分支链尾作为所在块末端**上汇到外层合流点**(合流点入边数 = 落到底的叶路径数,可 >2)。
+- `return`/`throw` 终止的分支不汇入。
+
+### 4.2 loop:条件恒 2(真→体/假→退出),体尾回边成环
+
+loop 与 if 的根本区别是**循环**:循环体不"汇合到 next",而是**回边到条件**,形成 NEXT 环;**退出只能靠条件变假**,故 `next` 只从条件(假路径)汇入。
+
+**loop 条件恒 2 分叉**:真→循环体首事件;假→**next(退出/fall-through)**。
+**回边**:循环体最末事件(或其 update)-> 条件,形成环。
+
+| 类型 | 入口 | 回边 | 退出 |
+| --- | --- | --- | --- |
+| `while(c){body}` | `…→c` | `body尾 → c` | `c(假)→next` |
+| `for(init;c;update){body}` | `init→c` | `body尾 → update → c`(无 update 则 `body尾→c`) | `c(假)→next` |
+| `do{body}while(c)` | **body 首**(先执行体,体在条件前) | `body尾 → c` | `c(假)→next` |
+
+三条不变式:
+1. **loop 条件恒 2**:真→体首;假→next(退出)。
+2. **体尾回边到条件**(for 的经 update),形成 NEXT 环——这是它区别于 if 的关键。
+3. **`next` 只由条件的假路径汇入 1 条**(body 回环、不并入 next);`break`/`return` 例外。
+
+### 4.3 规律摘要(与 if 对照)
+
+| | if | loop |
+| --- | --- | --- |
+| 条件分叉 | 恒 2:真→then,假→else/fall-through | 恒 2:真→体,假→next(退出) |
+| 分支尾去向 | **汇合到 next**(叶终端汇入) | **回边到条件**(成环,不汇入 next) |
+| 合流点入边 | 落到底的叶路径数(单层=2,嵌套可>2) | 1(仅条件假退出;break 例外) |
+
 
 | 决策 | 结论 | 理由 |
 | --- | --- | --- |
@@ -119,15 +163,15 @@ NEO4J_DATABASE  # 可选
 | TimingStep / DataStep / Reference | **删除** | 它们承载的只是方向标签 + 边界语义 + 归并便利，全部可迁移到边类型 CALLS / FLOWS / REF |
 | 方法上下文 | **不落库** | 由条件树 + 两流相交推导（见 4.1） |
 
-### 4.1 为什么方法上下文可以不落库
+### 5.1 为什么方法上下文可以不落库
 
 跨方法的数据流必然穿过 called-instance（传参 `calledParam→param`、返回值 `return→calledReturn`），在**方法边界**处数据轴（FLOWS）与时序轴（经调用分形 CALLS 接入的 NEXT）天然相交于同一枢纽。方法内数据流给出归属的方式：**Value 节点与调用点统一经 `NEXT` 链**（Condition 沿 NEXT 遍历即可到达其块内含的全部运行时节点）归到所在条件/方法根 → 条件树 → Method。前提：**每个运行时节点都入 NEXT 顺序链**，否则远离调用边界的数据流节点无法找回方法。
 
-## 5. 旧 prolog → Neo4j 映射
+## 6. 旧 prolog → Neo4j 映射
 
 > 注：`forwardFa / transition / classScope* / node* / resolve* / line / graph` 等是旧项目正则搜索的 FA 引擎和查询时定义，**不是图数据**，不参与映射（将来变成 cypher 模板）。
 
-### 5.1 直接成为节点属性的关系
+### 6.1 直接成为节点属性的关系
 
 这些事实本质是**单个实体的属性**，prolog 只能写成关系，Neo4j 天然是属性：
 
@@ -143,7 +187,7 @@ NEO4J_DATABASE  # 可选
 
 保持为边（实体间关系，写进属性丢遍历能力）：`method/constructor/field/parameter/return`（归属）、`subType`（继承）、`override`（覆写）、`methodUseMethod/methodUseField`（使用）。
 
-### 5.2 多元谓词降维（三种模式）
+### 6.2 多元谓词降维（三种模式）
 
 Neo4j 只支持二元关系，n 元谓词统一用三种方式降维：
 
@@ -171,7 +215,7 @@ Neo4j 只支持二元关系，n 元谓词统一用三种方式降维：
 | `runtimeKey(Mk, Key, RK, KeyType)` | 4 | 节点 `{key, kind}`（经 NEXT 链归到所属条件） |
 | `runtimeRead(Mk, V, RK)` / `runtimeWrite(Mk, V, RK)` | 3 | 节点 `{read, write}` 布尔属性，RK↔V 的流动由 FLOWS 承载 |
 
-## 6. 搜索方向 → cypher 模板（草案）
+## 7. 搜索方向 → cypher 模板（草案）
 
 > 以下为概念模板，实现时再细化。旧项目 5 个方向的语义对应关系见 `shishandaimaViewer/README.md`。
 
@@ -207,7 +251,7 @@ MATCH (v2:Value {name:"a1"})-[:REF]->(cm)
 RETURN cm, v1, v2
 ```
 
-## 7. 独立测试方案
+## 8. 独立测试方案
 
 ```
 脚本：docker run 一次性 Neo4j（:7687）
@@ -216,7 +260,7 @@ RETURN cm, v1, v2
      → docker rm 销毁
 ```
 
-## 8. 待办
+## 9. 待办
 
 实现状态：
 
