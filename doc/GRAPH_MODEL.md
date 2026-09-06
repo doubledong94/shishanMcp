@@ -146,7 +146,24 @@ loop 与 if 的根本区别是**循环**:循环体不"汇合到 next",而是**�
 2. **体尾回边到条件**(for 的经 update),形成 NEXT 环——这是它区别于 if 的关键。
 3. **`next` 只由条件的假路径汇入 1 条**(body 回环、不并入 next);`break`/`return` 例外。
 
-### 4.3 规律摘要(与 if 对照)
+### 4.3 try/catch/finally：try 体末分叉、catch 链 else-if、finally 公共汇合
+
+语义上 try 体完成后有**正常完成**和**抛异常**两种可能;异常可被某 catch **捕获**,也可**逃逸**。try/catch/finally 是"正常路径 + 异常路径"的组合,**finally 是两者都执行的公共收尾/汇合点**。
+
+| 位置 | NEXT |
+| --- | --- |
+| 入口 | `prev → TRY → try体首` |
+| 异常路径 | **`TRY → CATCH1`**(异常边,直接连,不依赖 try 体末节点);`CATCH_i → CATCH_{i+1}`(未匹配,else-if 式) |
+| try 体正常尾 | `→ finally`(有)/ `→ next`(无)。try 体块 `finish()` 末端 = 嵌套分支尾(与"if 块最后一句是 if"同理) |
+| catch 体尾 | `→ finally`(有)/ `→ next`(无) |
+| finally 体末 | `→ next` |
+
+要点:
+- **try 体末分叉恒 2**:正常 `→ finally/next`、异常 `→ CATCH`(对应 if 分叉);
+- **finally 是公共汇合点**:try 正常尾 + 各 catch 尾都汇入 finally,`finally → next`;无 finally 时合并点在**下一事件**(try 正常尾 + catch 体尾汇入);
+- **异常逃逸不单独画边**:静态代码无法区分"捕获 vs 逃逸"(运行时才决定),`finally → next` 只表示"能走到 next"的可能路径;逃逸类似 if 分支里的 `return`,从流里退出、不落 next。
+
+### 4.4 规律摘要(与 if 对照)
 
 | | if | loop |
 | --- | --- | --- |
