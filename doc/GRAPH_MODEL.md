@@ -88,8 +88,8 @@ NEO4J_DATABASE  # 可选
 | 关系 | 说明 | 旧 prolog |
 | --- | --- | --- |
 | `(:Method)-[:ROOT]->(:Condition)` | 方法根分支 | 方法 conditionItem |
-| `(:Condition)->(:Condition)` | 分支嵌套 | super→sub condition |
-| `(:Condition)->(:Condition)` | else 分支链 | Condition→Else→Condition |
+| `(:Condition)-[:NEXT]->(嵌套条件首事件)` | 分支嵌套：嵌套 if/循环在分支内，经分支的 NEXT 链进入（无 SUB 边） | super→sub condition |
+| `(:Condition)-[:NEXT]->(else-if 守卫值)` | else-if 链：前个 if 的假路径经 NEXT 进入下个 else-if 的守卫值，不再物化 kind=ELSE 节点/ELSE 边 | Condition→Else→Condition |
 | `(:CalledMethod)-[:CALLS]->(:Method)` | 调用点解析到被调方法声明 | calledMethod→TimingStep→method |
 | `(:Value)-[:ARG_OF]->(:CalledMethod)` | 实参属于哪个调用点 | calledParamToCalledReturn 等 |
 | `(:Value)-[:RET_OF]->(:CalledMethod)` | 返回值使用属于哪个调用点 | 同上 |
@@ -97,7 +97,7 @@ NEO4J_DATABASE  # 可选
 | `(:Value)-[:CONTROLS]->(:Condition)` | 条件变量守卫哪个分支 | `toConditionValue→conditionItem` |
 | `(:Value)-[:REF]->(:CalledMethod)` | 数据的分形：实例引用访问成员 | Reference |
 | `(:Value\|:CalledMethod\|:Condition)-[:NEXT]->(...)` | 时机（时序主轴）：事件级链，块尾接到块外后续、函数尾跨函数接到调用点。**所有运行时 value 事件都入链**（函数体直排 value、实参列表/条件表达式内部读取、实参槽 CALLED_PARAM、嵌套调用 CALLED_RETURN、索引元素 INDEX、返回 RETURN），保证 method↔value、value↔value 时序连续、节点不孤立；实参槽在调用点按执行序入链（`...→实参求值→实参槽→调用→返回→...`） | `codeOrder(Mk, S, D)` |
-| `(:Condition)-[:NEXT]->(then首事件)` / `(:Condition)-[:NEXT]->(else首事件)` | 分支入口：then/else 分支首事件都经 **NEXT** 从该条件直接进入顺序链（不物化 kind=ELSE 节点、无 ELSE/SUB 边；else-if 链也经 NEXT 连到其守卫值）；守卫表达式经 `CONTROLS` 查询。**有 else 兜底的 if 分叉受限**：条件只分叉到 then/else 两分支，不再额外连"整个 if 之后的下一个事件"（假路径已由 else 承接）；只有**无 else 的单分支 if** 才把条件再连到下一事件（假路径 fall-through） | `toConditionValue→conditionItem` + 分支结构 |
+| `(:Condition)-[:NEXT]->(then首事件)` / `(:Condition)-[:NEXT]->(else首事件)` | 分支入口：then/else 分支首事件都经 **NEXT** 从该条件直接进入顺序链（不物化 kind=ELSE 节点、无 ELSE/SUB 边；else-if 链也经 NEXT 连到其守卫值）；守卫表达式经 `CONTROLS` 查询。**if 条件节点的 NEXT 出边恒为 2（1 真 + 1 假），不多不少**：真路径→then 分支首事件；假路径→else 分支首事件（有 else 兜底，分叉受限，不再多连"整个 if 之后的下一个事件"）/ 下一事件的 fall-through（无 else）。**合并点（分支尾→下一事件）由分支尾承担，不占条件自己的分叉** | `toConditionValue→conditionItem` + 分支结构 |
 
 ### 3.3 属性
 
