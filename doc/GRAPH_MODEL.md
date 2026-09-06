@@ -96,7 +96,7 @@ NEO4J_DATABASE  # 可选
 | `(:Value)-[:FLOWS]->(:Value)` | 数据流（赋值/读写/传参/返回值） | `flow(Mk, S, D)` |
 | `(:Value)-[:CONTROLS]->(:Condition)` | 条件变量守卫哪个分支 | `toConditionValue→conditionItem` |
 | `(:Value)-[:REF]->(:CalledMethod)` | 数据的分形：实例引用访问成员 | Reference |
-| `(:Value\|:CalledMethod\|:Condition)-[:NEXT]->(...)` | 时机（时序主轴）：事件级链，块尾接到块外后续、函数尾跨函数接到调用点。**所有运行时 value 事件都入链**（函数体直排 value、实参列表/条件表达式内部读取、实参槽 CALLED_PARAM、嵌套调用 CALLED_RETURN、索引元素 INDEX、返回 RETURN），保证 method↔value、value↔value 时序连续、节点不孤立；实参槽在调用点按执行序入链（`...→实参求值→实参槽→调用→返回→...`） | `codeOrder(Mk, S, D)` |
+| `(:Value\|:CalledMethod\|:Condition)-[:NEXT]->(...)` | 时机（时序主轴）：事件级链，**只在单个方法体内**表达先后——块尾接到块外后续；**不建立跨函数的 NEXT**（不再有 `calledMethod→被调首事件`、`被调退出→calledReturn` 这类跨方法 NEXT），跨函数关联由 `CALLS`/`RET_OF`/`ARG_OF` 等逻辑边承载。**所有运行时 value 事件都入链**（函数体直排 value、实参列表/条件表达式内部读取、实参槽 CALLED_PARAM、嵌套调用 CALLED_RETURN、索引元素 INDEX、返回 RETURN），保证 method↔value、value↔value 时序连续、节点不孤立；实参槽在调用点按执行序入链（`...→实参求值→实参槽→调用→返回→...`）。**因 NEXT 不跨方法，从某方法 `ROOT` 条件沿 NEXT 可达只会留在该函数体内**——按函数限域(ROOT 锚定)整链连通、可稳定渲染 | `codeOrder(Mk, S, D)` |
 | `(:Condition)-[:NEXT]->(then首事件)` / `(:Condition)-[:NEXT]->(else首事件)` | 分支入口：then/else 分支首事件都经 **NEXT** 从该条件直接进入顺序链（不物化 kind=ELSE 节点、无 ELSE/SUB 边；else-if 链也经 NEXT 连到其守卫值）；守卫表达式经 `CONTROLS` 查询。**if 条件节点的 NEXT 出边恒为 2（1 真 + 1 假），不多不少**：真路径→then 分支首事件；假路径→else 分支首事件（有 else 兜底，分叉受限，不再多连"整个 if 之后的下一个事件"）/ 下一事件的 fall-through（无 else）。**合并点（分支尾→下一事件）由分支尾承担，不占条件自己的分叉** | `toConditionValue→conditionItem` + 分支结构 |
 
 **NEXT 汇合（merge）规律**：下一个事件（合流点）由 NEXT 从**每条落到底的"叶终端"各汇入 1 条**。叶终端 = 一条走到底的链尾；**分叉条件自身不是叶终端**（它只作叉点，其分支尾才是）。于是：
@@ -111,7 +111,7 @@ NEO4J_DATABASE  # 可选
 
 ## 4. NEXT 时序流(if 分叉与 loop 环)
 
-NEXT 是时序主轴(`粗topic链路`的边)。一个条件(if/loop)处,NEXT 遵循**分叉恒 2 + 汇合按叶终端**的规律;loop 额外形成**环(回边)**。本节只讲 if 与 loop 的 NEXT 流;try/catch/finally、跨函数(call/return)另见 3.2。
+NEXT 是时序主轴(`粗topic链路`的边)。一个条件(if/loop)处,NEXT 遵循**分叉恒 2 + 汇合按叶终端**的规律;loop 额外形成**环(回边)**。本节只讲 if 与 loop 的 NEXT 流;try/catch/finally 见 4.3、when 见 4.4。**NEXT 只在单个方法体内**——跨函数(call/return)的关联由 `CALLS` 等逻辑边表达,不用 NEXT 穿方法(见 3.2 的 NEXT 行说明)。
 
 ### 4.1 if 条件:分叉恒 2,汇合按叶终端
 
@@ -200,7 +200,7 @@ loop 与 if 的根本区别是**循环**:循环体不"汇合到 next",而是**�
 
 ### 5.1 为什么方法上下文可以不落库
 
-跨方法的数据流必然穿过 called-instance（传参 `calledParam→param`、返回值 `return→calledReturn`），在**方法边界**处数据轴（FLOWS）与时序轴（经调用分形 CALLS 接入的 NEXT）天然相交于同一枢纽。方法内数据流给出归属的方式：**Value 节点与调用点统一经 `NEXT` 链**（Condition 沿 NEXT 遍历即可到达其块内含的全部运行时节点）归到所在条件/方法根 → 条件树 → Method。前提：**每个运行时节点都入 NEXT 顺序链**，否则远离调用边界的数据流节点无法找回方法。
+跨方法的数据流必然穿过 called-instance（传参 `calledParam→param`、返回值 `return→calledReturn`），在**方法边界**处数据轴（FLOWS）与时序轴（经调用分形 `CALLS` 接入）天然相交于同一枢纽——但**时序轴（NEXT）本身不跨方法**，跨函数只由 `CALLS`/`RET_OF`/`ARG_OF` 等逻辑边表达。方法内数据流给出归属的方式：**Value 节点与调用点统一经 `NEXT` 链**（Condition 沿 NEXT 遍历即到达其块内含的全部运行时节点）归到所在条件/方法根 → 条件树 → Method。前提：**每个运行时节点都入 NEXT 顺序链**，否则远离调用边界的数据流节点无法找回方法。**因 NEXT 不跨方法，从某方法 ROOT 条件沿 NEXT 遍历正好落回该方法内**——方法上下文回归更干净、也不会因跨函数 NEXT 把别的函数误并入。
 
 ## 6. 旧 prolog → Neo4j 映射
 
