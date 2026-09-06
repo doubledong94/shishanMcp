@@ -85,7 +85,7 @@
 | 特殊字符 | 旧语义 | 新项目图模式                                      |
 | --- | --- |---------------------------------------------|
 | `Condition` | 条件分支节点 | `(:Condition)`                              |
-| `Else` | else 分支入口(逻辑标记) | `(:Condition)-[:ELSE]->(:Condition{kind:'ELSE'})`(再经 NEXT 进入 else 体) |
+| `Else` | else 分支入口(逻辑标记) | `(:Condition)->(:Condition{kind:'ELSE'})`(再经 NEXT 进入 else 体) |
 | `Reference` | 实例引用访问成员 | `(:Value)-[:REF]->(:CalledMethod\|:Value)`  |
 | `Index` | 数组访问 | `(:Value)-[:INDEX]->(:Value{kind:'INDEX'})` |
 | `DataStep` / `TimingStep` | 数据/时机步进 | 已并入 `FLOWS` / `CALLS` 关系（不物化节点）             |
@@ -211,13 +211,13 @@ RETURN p LIMIT 20
 | 时序轴 | **时机的分形（调用）** | `(:CalledMethod)-[:CALLS]->(:Method)` | `(:Condition)-[:NEXT*1..8]->(:CalledMethod)`、`(:Value)-[:ARG_OF/RET_OF]->(:CalledMethod)` | — | `calls`/`callers` |
 | 数据轴 | **数据（主轴）** | `(:Value)-[:FLOWS]->(:Value)` | — | 进出调用：`(:Value)-[:ARG_OF]->(:CalledMethod)`、`(:Value)-[:RET_OF]->(:CalledMethod)` | `dataflow` |
 | 数据轴 | **数据的分形（成员访问/下标）** | `(:Value)-[:REF]->(:CalledMethod\|:Value)`、`(:Value)-[:INDEX]->(:Value{kind:'INDEX'})` | — | — | `nesting` |
-| — | **逻辑** | 条件树：`(:Method)-[:ROOT]->(:Condition)`、`(:Condition)-[:SUB]->(:Condition)`、`(:Condition)-[:ELSE]->(:Condition)` | `(:Value)-[:CONTROLS]->(:Condition)` | `(:Condition)-[:NEXT*1..8]->(:CalledMethod)` | `controls` |
+| — | **逻辑** | 条件树：`(:Method)-[:ROOT]->(:Condition)`、`(:Condition)->(:Condition)`、`(:Condition)->(:Condition)` | `(:Value)-[:CONTROLS]->(:Condition)` | `(:Condition)-[:NEXT*1..8]->(:CalledMethod)` | `controls` |
 
 - **时机（主轴）**：核心 `NEXT` 事件链；分支入口 `Condition-[:NEXT]->(then首事件)`；跨函数时被调方法经 `CALLED_RETURN` 把时序接回调用者后续。
 - **时机的分形（调用）**：核心 `CALLS`（CalledMethod→Method）。与逻辑/数据/数据的分形的接缝都在调用点——`NEXT` 从条件进来，实参 `ARG_OF` / 返回 `RET_OF` 让数据进出调用，`REF` 也能引到它。是循环里被多维度汇聚的枢纽。
 - **数据（主轴）**：核心 `FLOWS`（Value→Value）；进出调用靠实参/返回槽。
 - **数据的分形（成员访问/下标）**：核心 `REF`（实例→成员/调用）+ `INDEX`（数组访问）。数据在结构层的自相似递归。
-- **逻辑**：内部骨架是**条件树**（`ROOT` 根分支、`SUB` 分支嵌套、`ELSE` else 链）。入口 `CONTROLS`（守卫值→分支），出口 `NEXT`（分支→触发调用点），据此交接到时序轴的 `CALLS`。`Condition↔Condition` 走 `SUB`/`ELSE`，不是 `CALLS`/`NEXT`/`CONTROLS`/`FLOWS`。
+- **逻辑**：内部骨架是**条件树**（`ROOT` 根分支（分支流向由 NEXT 表达））。入口 `CONTROLS`（守卫值→分支），出口 `NEXT`（分支→触发调用点），据此交接到时序轴的 `CALLS`。`Condition↔Condition` 走 `SUB`/`ELSE`，不是 `CALLS`/`NEXT`/`CONTROLS`/`FLOWS`。
 
 ### 11.2 维度两两相交（交点位置决定单/双 MATCH）
 

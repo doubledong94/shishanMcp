@@ -67,7 +67,7 @@ NEO4J_DATABASE  # 可选
 | --- | --- | --- |
 | `:CalledMethod` | `id, file, line, method` | 一处调用点；同时是 ARG_OF / RET_OF 的枢纽 |
 | `:Value`（运行时形态） | `id, kind, name, type, file, line, read, write` | kind ∈ FIELD / PARAM / RETURN / LOCAL_VAR / CALLED_PARAM / CALLED_RETURN / DEFAULT_VALUE / KEY_WORD_VALUE / ENUM_INSTANCE / ANONYMOUS_CLASS，对应旧 `GlobalInfo.h` 的 KEY_TYPE_* |
-| `:Condition` | `id, kind, method` | 分支节点，kind: IF / ELSE_IF / ELSE / LOOP / FOR / WHILE / CATCH… |
+| `:Condition` | `id, kind, method` | 分支节点，kind: IF / LOOP / FOR / WHILE / CATCH / TRY… |
 
 ### 3.2 关系类型
 
@@ -88,8 +88,8 @@ NEO4J_DATABASE  # 可选
 | 关系 | 说明 | 旧 prolog |
 | --- | --- | --- |
 | `(:Method)-[:ROOT]->(:Condition)` | 方法根分支 | 方法 conditionItem |
-| `(:Condition)-[:SUB]->(:Condition)` | 分支嵌套 | super→sub condition |
-| `(:Condition)-[:ELSE]->(:Condition)` | else 分支链 | Condition→Else→Condition |
+| `(:Condition)->(:Condition)` | 分支嵌套 | super→sub condition |
+| `(:Condition)->(:Condition)` | else 分支链 | Condition→Else→Condition |
 | `(:CalledMethod)-[:CALLS]->(:Method)` | 调用点解析到被调方法声明 | calledMethod→TimingStep→method |
 | `(:Value)-[:ARG_OF]->(:CalledMethod)` | 实参属于哪个调用点 | calledParamToCalledReturn 等 |
 | `(:Value)-[:RET_OF]->(:CalledMethod)` | 返回值使用属于哪个调用点 | 同上 |
@@ -97,7 +97,7 @@ NEO4J_DATABASE  # 可选
 | `(:Value)-[:CONTROLS]->(:Condition)` | 条件变量守卫哪个分支 | `toConditionValue→conditionItem` |
 | `(:Value)-[:REF]->(:CalledMethod)` | 数据的分形：实例引用访问成员 | Reference |
 | `(:Value\|:CalledMethod\|:Condition)-[:NEXT]->(...)` | 时机（时序主轴）：事件级链，块尾接到块外后续、函数尾跨函数接到调用点。**所有运行时 value 事件都入链**（函数体直排 value、实参列表/条件表达式内部读取、实参槽 CALLED_PARAM、嵌套调用 CALLED_RETURN、索引元素 INDEX、返回 RETURN），保证 method↔value、value↔value 时序连续、节点不孤立；实参槽在调用点按执行序入链（`...→实参求值→实参槽→调用→返回→...`） | `codeOrder(Mk, S, D)` |
-| `(:Condition)-[:NEXT]->(then首事件)` / `(:Condition)-[:ELSE]->(:Condition{kind:'ELSE'})-[:NEXT]->(else首事件)` | 分支入口：then/else 首事件都经 **NEXT** 进入顺序链（else 先到 kind=ELSE 条件节点、再经 NEXT 进入 else 体）；`ELSE` 边只作"条件 --ELSE--> ELSE节点"的逻辑标记；守卫表达式经 `CONTROLS` 查询 | `toConditionValue→conditionItem` + 分支结构 |
+| `(:Condition)-[:NEXT]->(then首事件)` / `(:Condition)->(:Condition{kind:'ELSE'})-[:NEXT]->(else首事件)` | 分支入口：then/else 首事件都经 **NEXT** 进入顺序链（else 先到 kind=ELSE 条件节点、再经 NEXT 进入 else 体）；`ELSE` 边只作"条件 --ELSE--> ELSE节点"的逻辑标记；守卫表达式经 `CONTROLS` 查询 | `toConditionValue→conditionItem` + 分支结构 |
 
 ### 3.3 属性
 
@@ -219,7 +219,7 @@ RETURN cm, v1, v2
 - [x] 独立测试脚本（`scip-java/scripts/e2e-graph-test.sh`：一次性 Neo4j + 断言）
 - [x] shishanMcp：compose 给 scip 容器注入 NEO4J_* 环境变量
 - [x] shishanMcp：`generate_scip_index` 返回写入统计（graph 字段）；`import_to_graph` 已移除（fork 直写为唯一入库路径，旧 SCIP-JSON 导入链删除）；`query_graph` 新增 preset 预置模板
-- [x] fork：运行时值节点（每次出现一个，读写区分）+ FLOWS（赋值/末写/传参/返回）+ CONTROLS + REF + ELSE + CalledReturn
+- [x] fork：运行时值节点（每次出现一个，读写区分）+ FLOWS（赋值/末写/传参/返回）+ CONTROLS + REF + CalledReturn（分支流向由 NEXT）
 - [x] fork：分支感知数据流（分支作用域复制父态 / 并集合并 / 嵌套 / 循环反馈 / return 分支不合并 / 确定性赋值清空预写 / 反馈 happenLaterThan / 循环携带依赖 outer-only 读进反馈 / unwrittenReads 向上传播）
 - [x] fork：写穿引用（reversedRef：`obj.field = x` 写目标为字段、基对象记已写）+ 字段访问 REF 边（数据的分形）
 - [x] fork：跨方法传参绑定（calledParam→callee 形参，按声明序）、跨方法返回值绑定（callee return→calledReturn）
