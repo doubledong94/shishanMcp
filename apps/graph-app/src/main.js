@@ -337,64 +337,70 @@ function applyFlowForGraph() {
 const _FLOW_WHITE = new THREE.Color(1, 1, 1);
 
 /**
- * 用最短路程给每个节点算流位置 ratio = fromTop/(fromTop+toBottom)，对齐旧项目 igraph 实现：
+ * 用最短路算每个节点的流位置 ratio = fromTop/(fromTop+toBottom)，对齐旧项目 igraph 实现：
  * fromTop = max over 各源(入度0) 的"源→节点最短路径边数"，toBottom = max over 各汇(出度0) 的"节点→汇最短路径边数"。
  * 规则同旧 getNodeRelativePosition()：从任何源都不可达(孤立/纯环)→0(黄)；到不了任何汇→1(洋红)；length==0→0。
- */
-/**
- * 用 Kahn 拓扑剥层算流位置 ratio = fromTop/(fromTop+toBottom)，保证**沿流程单调**（源=黄、汇=洋红，
- * 中间一层深一层，分支/汇合处不跳色）。此前对齐旧项目 igraph 的 max 最短路在分支点非单调，
- * 导致"洋红后跟黄"的跳色，这里改回拓扑剥层。
- * fromTop = 从源头沿出边剥到的层号，toBottom = 从汇沿入边反向剥到的层号。
+ * 用最短路而非拓扑剥层：**最短路对环是天然的**——环内(如 loop 条件/body/守卫)只要可从源到达、
+ * 能到达汇，就得到有限距离，照常落在黄→洋红渐变上；拓扑剥层遇到环会剥不出来、落成中间色。旧项目
+ * 对"无入度0源的全环"还额外用 igraph 反馈弧集(FAS)兜底，这里对无源情形退化为全部不可达→黄。
  */
 function computeFlowColors() {
   flowColorRatio.clear();
   const ids = state.nodes.map((n) => n.id);
   const nodeSet = new Set(ids);
   if (!ids.length) return;
-  const out = new Map(), inCnt = new Map(); // out: 后继，inCnt: 入度计数
-  for (const id of ids) { out.set(id, []); inCnt.set(id, 0); }
+  const out = new Map(), revOut = new Map(), inCnt = new Map(); // out: 后继, revOut: 前驱, inCnt: 入度
+  for (const id of ids) { out.set(id, []); revOut.set(id, []); inCnt.set(id, 0); }
   for (const e of state.edges) {
     if (nodeSet.has(e.from) && nodeSet.has(e.to)) {
       out.get(e.from).push(e.to);
+      revOut.get(e.to).push(e.from);
       inCnt.set(e.to, inCnt.get(e.to) + 1);
     }
   }
-  const layerFrom = peelLayers(ids, inCnt, out);
-  // 反向：把边倒过来再剥一层，得"离汇多远"
-  const revOut = new Map(), revInc = new Map();
-  for (const id of ids) { revOut.set(id, []); revInc.set(id, 0); }
-  for (const e of state.edges) {
-    if (nodeSet.has(e.from) && nodeSet.has(e.to)) {
-      revOut.get(e.to).push(e.from);
-      revInc.set(e.from, revInc.get(e.from) + 1);
-    }
-  }
-  const layerTo = peelLayers(ids, revInc, revOut);
+  const sources = ids.filter((id) => inCnt.get(id) === 0);
+  const sinks = ids.filter((id) => out.get(id).length === 0);
+  const fromTop = maxDistFrom(ids, out, sources);
+  const toBottom = maxDistFrom(ids, revOut, sinks);
   for (const id of ids) {
-    const fromTop = layerFrom.get(id) ?? 0;
-    const toBottom = layerTo.get(id) ?? 0;
-    const ratio = fromTop + toBottom === 0 ? 0.5 : fromTop / (fromTop + toBottom);
+    const a = fromTop.get(id), b = toBottom.get(id);
+    let ratio;
+    if (a < 0) ratio = 0; // 从任何源不可达(孤立/纯环) → 黄
+    else if (b < 0) ratio = 1; // 到不了任何汇 → 洋红
+    else { const len = a + b; ratio = len === 0 ? 0 : a / len; }
     flowColorRatio.set(id, THREE.MathUtils.clamp(ratio, 0, 1));
   }
 }
 
-/** 拓扑剥层：入度为 0 的节点剥为第 0 层，逐层递增（单调）；环内节点无记录（默认 0）。 */
-function peelLayers(ids, inCountRef, outRef) {
-  const incnt = new Map(inCountRef);
-  const depth = new Map();
-  const q = [];
-  for (const id of ids) if (incnt.get(id) === 0) { q.push(id); depth.set(id, 0); }
-  let qi = 0;
-  while (qi < q.length) {
-    const cur = q[qi++];
-    for (const nb of outRef.get(cur)) {
-      const nu = incnt.get(nb) - 1;
-      incnt.set(nb, nu);
-      if (nu === 0) { depth.set(nb, depth.get(cur) + 1); q.push(nb); }
+/**
+ * 从起点集算各节点"到最远源"的最短路径边数(max over sources，对齐旧项目 igraph_distances 取行 max)。
+ * 用 BFS(一个起点一次)：最短路对环天然给出有限距离(环内节点可达即有限)。不可达→-1。
+ */
+function maxDistFrom(ids, adj, starts) {
+  const best = new Map();
+  for (const id of ids) best.set(id, -1);
+  if (!starts.length) return best; // 无源(纯环):旧项目用 FAS 兜底,此处退化为全部不可达→黄
+  for (const s of starts) {
+    const dist = new Map();
+    for (const id of ids) dist.set(id, -1);
+    dist.set(s, 0);
+    const q = [s];
+    let qi = 0;
+    while (qi < q.length) {
+      const cur = q[qi++];
+      for (const nb of adj.get(cur)) {
+        if (dist.get(nb) === -1) {
+          dist.set(nb, dist.get(cur) + 1);
+          q.push(nb);
+        }
+      }
+    }
+    for (const id of ids) {
+      const d = dist.get(id);
+      if (d > best.get(id)) best.set(id, d);
     }
   }
-  return depth;
+  return best;
 }
 
 function enableFlowColor() {
