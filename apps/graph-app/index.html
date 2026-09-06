@@ -250,7 +250,17 @@
         flex: none; width: 48px; text-align: right; padding-right: 10px;
         color: #484f58; user-select: none; background: #0d1117;
       }
-      .code .txt { white-space: pre; padding-right: 16px; }
+      .code .txt {
+        white-space: pre; padding-right: 16px;
+        /* 代码用等宽字体(缩进对齐需等宽) */
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px;
+        /* 缩进引导线(简单版,2 空格一档)：等宽一字符≈0.6em，2 空格≈1.2em。
+           用 repeating-linear-gradient 在每档缩进边界画 1px 竖线；只会画在 .txt(代码区)上，
+           不覆盖左侧行号区；各行的 .txt 从同一起点开始，竖线跨行对齐成连续引导线。 */
+        background: repeating-linear-gradient(90deg,
+          transparent 0 calc(1.2em - 1px),
+          rgba(139,148,158,0.14) calc(1.2em - 1px) 1.2em);
+      }
       .code .code-line.found { background: #3a2d12; }
       .code .code-line.actCursor { background: #1f6feb22; }
       .tok-kw { color: #ff7b72; }
