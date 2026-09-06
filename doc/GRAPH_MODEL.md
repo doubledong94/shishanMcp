@@ -179,7 +179,7 @@ loop 与 if 的根本区别是**循环**:循环体不"汇合到 next",而是**�
 - 守卫**读**在 when 条件**之前**入链(读 → 条件 → 分支)。
 - `x = when{…}`:when 分支体尾汇入 `x` 的**写**,顺序为读→写。
 
-> 实现现状(已按 if-else-if 重构):每个非 else 的 WHEN_ENTRY 守卫物化为一个 kind=IF 条件节点(锚在守卫位置,如 okhttp CallServerInterceptor.kt`response = when{…}` 的 when 条件落在守卫 `isUpgradeRequest` 处 #140:10),守卫读先入链、条件恒 2 分叉(真→本分支体首、假→else 体首),所有落到底的分支尾汇入 when 之后的合并点。**注意**:`x = when{…}` 汇入 `x` 写这个"先读后写"的合并,依赖赋值写节点正常入链;但**重新赋值**(`var x; x = when{…}`)的写当前不物化为图节点(与 whether/多行 RHS 的写延迟是同一既有问题),故此时分支尾并入 when 之后的下一事件(相邻语句首事件)。
+> 实现现状(已按 if-else-if 重构):每个非 else 的 WHEN_ENTRY 守卫物化为一个 kind=IF 条件节点(锚在守卫位置,如 okhttp CallServerInterceptor.kt`response = when{…}` 的 when 条件落在守卫 `isUpgradeRequest` 处 #140:10),守卫读先入链、条件恒 2 分叉(真→本分支体首、假→else 体首),所有落到底的分支尾汇入 when 之后的合并点。**`x = when{…}` 的合并点 = `x` 的写**(先读后写):重新赋值(`var x; x = when{…}`)的写也已纳入链——把写延迟到赋值语句末行(when RHS 末行)再入链,分支尾在写处汇合;example 中两条 when 分支尾(149:15、170:16 的 `.build()` 返回)都汇入 `response` 写 #137:6,再续到之后的语句。
 
 ### 4.5 规律摘要(与 if 对照)
 
