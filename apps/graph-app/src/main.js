@@ -1678,6 +1678,39 @@ function setEdgeFlow(idx, v) {
   edgeGeo.attributes.edgeFlow.needsUpdate = true;
 }
 
+// ---------- 右键「流光」：所有边整体流光开/关（同步、持续） ----------
+let flowAllActive = false; // 全局流光开
+let flowAllDir = 1;        // 1=正向(from→to)，-1=反向(to→from)
+const FLOW_ALL_PERIOD = 1700; // 一个完整流光周期(ms)
+
+/** 右键点「流光」：开→所有边同步持续流光；再点→全部边停止(回到 -2 无流光)。 */
+function toggleGlobalFlow(backward) {
+  flowAllActive = !flowAllActive;
+  flowAllDir = backward ? -1 : 1;
+  if (!flowAllActive) {
+    if (edgeGeo && edgeGeo.attributes.edgeFlow) {
+      for (let i = 0; i < state.edges.length; i++) setEdgeFlow(i, -2);
+    }
+  }
+}
+
+/** 每帧把全部边上的流光亮带同步推进一个相位：亮带在每边上都从起点移动向终点(或反向)，周期循环。 */
+function updateAllFlow(now) {
+  if (!edgeGeo || !edgeGeo.attributes.edgeFlow) return;
+  const n = state.edges.length;
+  if (!n) return;
+  const p = (now / FLOW_ALL_PERIOD) % 1;
+  const v = flowAllDir > 0 ? p : 1 - p;
+  for (let i = 0; i < n; i++) {
+    const o = i * 4;
+    eFlowArr[o] = v;
+    eFlowArr[o + 3] = v;
+    eFlowArr[o + 1] = v - 1;
+    eFlowArr[o + 2] = v - 1;
+  }
+  edgeGeo.attributes.edgeFlow.needsUpdate = true;
+}
+
 /** 边流光脉冲：沿「该节点 → 选中邻居」的边传播，到达端点再级联（穿越选中子图）。
  *  支持菱形合流重触发：同一节点经多条路径到达时，其出边会再次脉冲——
  *  如 a-b-c-d-e 与 a-d-e 两条链在 d 汇聚，d→e 会沿 a-d 与 a-b-c-d 各触发一次。
@@ -1748,7 +1781,7 @@ ctxMenu.addEventListener("click", (e) => {
   hideContextMenu();
   if (!id || !act) return;
   if (act === "flow" || act === "flow-back") {
-    startFlowFrom(id, act === "flow-back"); // 每次新手势 fresh path=∅
+    toggleGlobalFlow(act === "flow-back"); // 所有边整体流光开/关
   } else if (act === "source") {
     viewSourceForNode(id);
   } else if (act === "copy-hover") {
@@ -1876,6 +1909,7 @@ function animate(now) {
 
   try {
     tween.update(dt);
+    if (flowAllActive) updateAllFlow(now); // 整体流光：每帧同步推进所有边
     if (layoutRunning && state.nodes.length) stepLayout(dt);
     densityTick++;
     if ((densityTick & 7) === 0) updateScaleByDistance();
