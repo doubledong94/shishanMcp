@@ -688,8 +688,10 @@ const _EDGE_C0 = new THREE.Color();
 const _EDGE_C1 = new THREE.Color();
 const _EDGE_CAMDIR = new THREE.Vector3();
 // 语义标记色：branch="false"(假/else 路径) 橙；exception(catch 异常入口) 紫蓝。
-const _EDGE_FALSE = new THREE.Color("#e67e22");
-const _EDGE_EXC = new THREE.Color("#8e44ad");
+// 用 srgbHex 按"最终显示值"直接存分量（跳过 ColorManagement 的 sRGB→线性转换），使 shader 原样输出
+// 与图例 swatch 的原始 CSS 十六进制一致，避免渲染成偏暗/偏灰的另一个"紫"。
+const _EDGE_FALSE = srgbHex(0xe67e22);
+const _EDGE_EXC = srgbHex(0x8e44ad);
 
 /** 边的语义标记色：branch=false → 橙；exception → 紫(优先)；其余返回 null(走默认着色)。 */
 function edgeSemanticColorFor(e) {
