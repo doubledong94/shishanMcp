@@ -36,6 +36,8 @@ export interface GraphEdge {
   from: string;
   to: string;
   label: string;
+  /** 边属性（如 `branch`="true"/"false"、`exception`=<异常全名>），供前端按语义上色/标注。 */
+  props?: Record<string, unknown>;
 }
 
 export interface GraphView {
@@ -622,7 +624,7 @@ function mergeGraphs(a: { nodes: GraphNode[]; edges: GraphEdge[]; rows?: string[
   const nodes = [...(a.nodes || [])];
   const edges = [...(a.edges || [])];
   const nodeSeen = new Set(nodes.map((n) => n.id));
-  const edgeSeen = new Set(edges.map((e) => `${e.from}->${e.to}->${e.label}`));
+  const edgeSeen = new Set(edges.map((e) => `${e.from}->${e.to}->${e.label}->${JSON.stringify(e.props || {})}`));
   for (const n of b.nodes || []) {
     if (!nodeSeen.has(n.id)) {
       nodeSeen.add(n.id);
@@ -630,7 +632,7 @@ function mergeGraphs(a: { nodes: GraphNode[]; edges: GraphEdge[]; rows?: string[
     }
   }
   for (const e of b.edges || []) {
-    const key = `${e.from}->${e.to}->${e.label}`;
+    const key = `${e.from}->${e.to}->${e.label}->${JSON.stringify(e.props || {})}`;
     if (!edgeSeen.has(key)) {
       edgeSeen.add(key);
       edges.push(e);
@@ -733,11 +735,17 @@ function extractGraphView(cypher: string, records: unknown[]): GraphView {
     nodeSeen.add(id);
     nodes.push({ id, label, kind, ...(extra || {}) });
   }
-  function addEdge(from: string, to: string, label: string) {
-    const key = `${from}->${to}->${label}`;
+  function addEdge(
+    from: string,
+    to: string,
+    label: string,
+    props?: Record<string, unknown>,
+  ) {
+    // 去重键含 props，避免同 from/to/label 但不同属性(如 branch/exception)的边被折叠。
+    const key = `${from}->${to}->${label}->${JSON.stringify(props || {})}`;
     if (edgeSeen.has(key)) return;
     edgeSeen.add(key);
-    edges.push({ from, to, label });
+    edges.push(props && Object.keys(props).length ? { from, to, label, props } : { from, to, label });
   }
 
   function visit(value: unknown) {
@@ -770,6 +778,7 @@ function extractGraphView(cypher: string, records: unknown[]): GraphView {
         `node-${v.start.toString()}`,
         `node-${v.end.toString()}`,
         String(v.type || "RELATED"),
+        v.properties || undefined,
       );
       return;
     }
@@ -781,6 +790,7 @@ function extractGraphView(cypher: string, records: unknown[]): GraphView {
           `node-${seg.start.identity.toString()}`,
           `node-${seg.end.identity.toString()}`,
           String(seg.relationship?.type || "RELATED"),
+          seg.relationship?.properties || undefined,
         );
       }
       return;

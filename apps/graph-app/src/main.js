@@ -554,7 +554,8 @@ let ePosArr = null, eDirArr = null, eColArr = null, eUvArr = null, eFlowArr = nu
 
 function rebuildEdges() {
   const edges = state.edges.filter((e) => nodePos.has(e.from) && nodePos.has(e.to));
-  edgeData = edges.map((e) => ({ from: e.from, to: e.to, label: e.label })); // 保留 label 供按维度着色
+  // 保留 label(维度着色)与 props(语义标记：branch=false/exception 上色)
+  edgeData = edges.map((e) => ({ from: e.from, to: e.to, label: e.label, props: e.props }));
   if (edgeMesh) {
     graphGroup.remove(edgeMesh);
     if (edgeGeo) edgeGeo.dispose();
@@ -660,6 +661,14 @@ function updateEdgeBuffers() {
       eColArr[(o + 1) * 3] = _EDGE_C1.r; eColArr[(o + 1) * 3 + 1] = _EDGE_C1.g; eColArr[(o + 1) * 3 + 2] = _EDGE_C1.b;
       eColArr[(o + 2) * 3] = _EDGE_C1.r; eColArr[(o + 2) * 3 + 1] = _EDGE_C1.g; eColArr[(o + 2) * 3 + 2] = _EDGE_C1.b;
     }
+    // 语义标记色覆盖：branch=false(假/else 路径)→橙；exception(catch 异常入口)→紫；exception 优先。
+    const sem = edgeSemanticColorFor(e);
+    if (sem) {
+      for (let k = 0; k < 4; k++) {
+        const oo = (o + k) * 3;
+        eColArr[oo] = sem.r; eColArr[oo + 1] = sem.g; eColArr[oo + 2] = sem.b;
+      }
+    }
     // alpha：顶点0,3=起点 alpha，1,2=终点 alpha（对齐旧 FlowLine，端点选中则不透明、未选中半透明）。
     // 维度色已是 sRGB 直存（色相正确），半透明(0.3)下也显示正确色相，无需再强制不透明。
     const aFrom = nodeAlphaFor(e.from);
@@ -678,6 +687,18 @@ function updateEdgeBuffers() {
 const _EDGE_C0 = new THREE.Color();
 const _EDGE_C1 = new THREE.Color();
 const _EDGE_CAMDIR = new THREE.Vector3();
+// 语义标记色：branch="false"(假/else 路径) 橙；exception(catch 异常入口) 紫蓝。
+const _EDGE_FALSE = new THREE.Color("#e67e22");
+const _EDGE_EXC = new THREE.Color("#8e44ad");
+
+/** 边的语义标记色：branch=false → 橙；exception → 紫(优先)；其余返回 null(走默认着色)。 */
+function edgeSemanticColorFor(e) {
+  const p = e && e.props;
+  if (!p) return null;
+  if (p.exception != null && p.exception !== "") return _EDGE_EXC;
+  if (p.branch === "false") return _EDGE_FALSE;
+  return null;
+}
 
 /** 端点 alpha（对齐旧 FlowLine：选中/高亮 1.0 不透明，未选中 0.3 半透明，悬停 +0.2）。 */
 function nodeAlphaFor(id) {
