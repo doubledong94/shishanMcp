@@ -1678,10 +1678,13 @@ function setEdgeFlow(idx, v) {
   edgeGeo.attributes.edgeFlow.needsUpdate = true;
 }
 
-let flowGestureEdges = new Set(); // 本次右键手势已流过的边索引：同一手势内不重播，保证一次性动画并防止选中子图有环时无限往返
 /** 边流光脉冲：沿「该节点 → 选中邻居」的边传播，到达端点再级联（穿越选中子图）。
- *  对齐旧 FlowLine：每条边只脉冲一次(0→1)后熄灭；手势内已流过的边不再重复。 */
-function startFlowFrom(id, backward = false) {
+ *  支持菱形合流重触发：同一节点经多条路径到达时，其出边会再次脉冲——
+ *  如 a-b-c-d-e 与 a-d-e 两条链在 d 汇聚，d→e 会沿 a-d 与 a-b-c-d 各触发一次。
+ *  用「级联祖先路径」判环：目标已在当前级联路径上(是祖先)才是真环、截断不再级联；
+ *  菱形合流因来自不同路径、不判环，可重触发（区别于旧 FlowLine 的"每边只亮一次"）。
+ *  path = 当前级联链上 source 之前的祖先节点集合。 */
+function startFlowFrom(id, backward = false, path = new Set()) {
   const edges = state.edges;
   for (let i = 0; i < edges.length; i++) {
     const e = edges[i];
@@ -1694,15 +1697,16 @@ function startFlowFrom(id, backward = false) {
       if (e.from === id && nodeIx.has(e.to)) targetId = e.to;   // 出边 → 被调用方(下游)
     }
     if (!targetId || targetId === id) continue;
-    if (flowGestureEdges.has(i)) continue; // 本次手势已流，跳过（防环）
-    flowGestureEdges.add(i);
-    // 只有到达端点是「选中/高亮/组选」才继续级联；否则仅让这条边亮一次
-    const cascade = selectedIds.has(targetId) || highlightIds.has(targetId);
-    animateFlowEdge(i, targetId, cascade, backward);
+    // 环检测：目标已是当前级联路径的祖先 → 回边成环，只让这条边亮、不再级联（防无限往返）；
+    // 否则菱形合流（不同路径到同一点）不判环，可重复触发。
+    const cycle = path.has(targetId);
+    const tooDeep = path.size > 200; // 病态深层级联的保护上限
+    const cascade = (selectedIds.has(targetId) || highlightIds.has(targetId)) && !cycle && !tooDeep;
+    animateFlowEdge(i, id, targetId, cascade, backward, path);
   }
 }
 
-function animateFlowEdge(idx, targetId, cascade, backward) {
+function animateFlowEdge(idx, sourceId, targetId, cascade, backward, path) {
   // backward = 反向流光（shift+右键）
   const from = backward ? 1 : 0;
   const to = backward ? 0 : 1;
@@ -1714,7 +1718,11 @@ function animateFlowEdge(idx, targetId, cascade, backward) {
     },
     onEnd: () => {
       setEdgeFlow(idx, -2);
-      if (cascade) startFlowFrom(targetId, backward); // 级联到下一跳
+      if (cascade) {
+        const next = new Set(path);
+        next.add(sourceId); // 把本跳起点并入祖先路径，供下一跳判环
+        startFlowFrom(targetId, backward, next);
+      }
     },
   });
 }
@@ -1740,8 +1748,7 @@ ctxMenu.addEventListener("click", (e) => {
   hideContextMenu();
   if (!id || !act) return;
   if (act === "flow" || act === "flow-back") {
-    flowGestureEdges.clear(); // 新手势：本次只做一回动画
-    startFlowFrom(id, act === "flow-back");
+    startFlowFrom(id, act === "flow-back"); // 每次新手势 fresh path=∅
   } else if (act === "source") {
     viewSourceForNode(id);
   } else if (act === "copy-hover") {
