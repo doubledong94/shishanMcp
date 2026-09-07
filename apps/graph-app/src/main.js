@@ -1717,21 +1717,30 @@ function toggleGlobalFlow(backward) {
   }
 }
 
-/** 每帧把全部边上的流光亮带同步推进一个相位：亮带在每边上都从起点移动向终点(或反向)，周期循环。 */
+/** 每帧把"与选中节点直接相连的边"上的流光亮带同步推进一个相位（起点→终点，或反向，周期循环）；
+ *  未连接到任何选中节点的边恒为 -2（无流光、永不动画）。 */
 function updateAllFlow(now) {
   if (!edgeGeo || !edgeGeo.attributes.edgeFlow) return;
   const n = state.edges.length;
   if (!n) return;
   const p = (now / FLOW_ALL_PERIOD) % 1;
   const v = flowAllDir > 0 ? p : 1 - p;
+  let any = false;
   for (let i = 0; i < n; i++) {
+    const e = edgeData[i];
     const o = i * 4;
-    eFlowArr[o] = v;
-    eFlowArr[o + 3] = v;
-    eFlowArr[o + 1] = v - 1;
-    eFlowArr[o + 2] = v - 1;
+    const connected = selectedIds.has(e.from) || selectedIds.has(e.to);
+    if (connected) {
+      eFlowArr[o] = v;
+      eFlowArr[o + 3] = v;
+      eFlowArr[o + 1] = v - 1;
+      eFlowArr[o + 2] = v - 1;
+      any = true;
+    } else {
+      eFlowArr[o] = -2; eFlowArr[o + 3] = -2; eFlowArr[o + 1] = -2; eFlowArr[o + 2] = -2;
+    }
   }
-  edgeGeo.attributes.edgeFlow.needsUpdate = true;
+  if (any) edgeGeo.attributes.edgeFlow.needsUpdate = true;
 }
 
 /** 边流光脉冲：沿「该节点 → 选中邻居」的边传播，到达端点再级联（穿越选中子图）。
