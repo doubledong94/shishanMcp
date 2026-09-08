@@ -17,6 +17,31 @@ const BUILD = (() => {
   }
 })();
 const app = document.getElementById("app");
+
+// ---- 浏览器→后端 dbglog 桥：把 console/报错转发到 /api/graph/dbglog，便于服务端侧排查 ----
+let _dbgq = [];
+let _dbgTimer = null;
+function _dbgPush(...a) {
+  try { _dbgq.push(a.map((x) => (typeof x === "object" ? (JSON.stringify(x) || String(x)) : String(x))).join(" ")); } catch (e) {}
+  if (_dbgTimer) return;
+  _dbgTimer = setTimeout(() => { _dbgTimer = null; _dbgSend(); }, 120); // 短延迟 flush，单条也能发出
+}
+function _dbgSend() {
+  const l = _dbgq.splice(0, _dbgq.length);
+  if (!l.length) return;
+  fetch("/api/graph/dbglog", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ lines: l }) }).catch(() => {});
+}
+window.addEventListener("error", (e) => { _dbgPush("[ERROR]", e && (e.message || e.error)); _dbgSend(); });
+window.addEventListener("unhandledrejection", (e) => { _dbgPush("[REJECT]", (e && e.reason && e.reason.message) || (e && e.reason)); _dbgSend(); });
+try {
+  const _c = console;
+  ["log", "warn", "error"].forEach((m) => {
+    const orig = _c[m] && _c[m].bind(_c);
+    if (!orig) return;
+    _c[m] = (...a) => { try { orig(...a); } catch (e) {} _dbgPush("[" + m.toUpperCase() + "]", ...a); };
+  });
+} catch (e) {}
+
 const projectSel = document.getElementById("project");
 const viewSel = document.getElementById("view");
 const loadBtn = document.getElementById("view-btn");
@@ -427,6 +452,7 @@ function clearUnselectedColor() {
 function initMenubar() {
   const bar = document.getElementById("menubar");
   const closeAll = () => bar.querySelectorAll(".menu.open").forEach((m) => m.classList.remove("open"));
+  window.__closeMenus = closeAll; // 暴露给菜单栏外的按钮(如 NEXT:DOT)关闭下拉
   bar.querySelectorAll(".menu-title").forEach((btn) => {
     btn.addEventListener("click", (e) => {
       e.stopPropagation();
@@ -718,7 +744,7 @@ let nextAnchors = new Map(); // NEXT 非条件节点 id -> 归属条件坐标（
 let _layoutTelemetry = 0;    // 布局遥测计数（每 ~120 帧上报一次自由点-锚点距离）
 // Ranked 定向力导（DAG/flow）：xs=执行层横向间距(列拉力目标)，rankStrength=列拉力强度，ys=层内初始散开间距
 // 主链（事件）间距 / Value 数据坑的首行下移量 / 数据坑内上下叠的节距（世界单位）
-const DOT_LAYOUT = { cw: 56, levelY: 104, body: 28, bx: 16, anchor: 1.6, nextSpring: 0.6, repFrac: 0.15, rankStrength: 0.10 };
+const DOT_LAYOUT = { cw: 30, levelY: 104, body: 28, bx: 16, rowH: 34, anchor: 1.6, nextSpring: 0.6, repFrac: 0.15, rankStrength: 0.10 };
 
 function nodeKind(id) { const n = nodesById.get(id); return n ? (n.kind || n.label || "") : ""; }
 
@@ -730,7 +756,7 @@ function nodeKind(id) { const n = nodesById.get(id); return n ? (n.kind || n.lab
  * 这样函数的时序一目了然，Value 仍可见（不隐藏）、不占用主链横向步距，线更短更清爽。
  */
 function computeDotLayout() {
-  if (!dotLayoutOn) { dotNodes.clear(); nextAnchors.clear(); dotRank.clear(); return; } // 默认全量力导
+  if (!dotLayoutOn) { dotNodes.clear(); nextAnchors.clear(); dotRank.clear(); return; }
   const prevOf = new Map(), nextOf = new Map(), incident = new Set();
   for (const e of state.edges) {
     if (e.label !== "NEXT") continue;
@@ -741,107 +767,106 @@ function computeDotLayout() {
     if (!prevOf.has(e.to)) prevOf.set(e.to, []);
     prevOf.get(e.to).push(e.from);
   }
-  if (incident.size === 0) { dotNodes = incident; dotRank.clear(); return; }
   const ids = [...incident];
-  // 1) rank = 最长路径执行层（用于拓扑序 tie-break，让主链单调推进）
-  const rank = new Map(); for (const id of ids) rank.set(id, 0);
+  if (ids.length === 0) { dotNodes.clear(); nextAnchors.clear(); dotRank.clear(); return; }
+  const isEvent = (id) => { const k = nodeKind(id); return k === "Condition" || k === "CalledMethod"; };
+  const isValue = (id) => nodeKind(id) === "Value";
+
+  // 1) 全局最长路径 rank，用来识别回边(倒流: rank(v) <= rank(u)，如 loop 体尾→条件首事件)。
+  const preRank = new Map(); for (const id of ids) preRank.set(id, 0);
   for (let g = 0; g < ids.length; g++) {
     let ch = false;
-    for (const id of ids) for (const p of prevOf.get(id) || []) {
-      if (incident.has(p) && rank.get(p) + 1 > rank.get(id)) { rank.set(id, rank.get(p) + 1); ch = true; }
-    }
+    for (const id of ids) for (const p of prevOf.get(id) || []) if (incident.has(p) && preRank.get(p) + 1 > preRank.get(id)) { preRank.set(id, preRank.get(p) + 1); ch = true; }
     if (!ch) break;
   }
-  // 2) NEXT 拓扑序（Kahn，待处理按 rank 降序）
-  const indeg = new Map(); for (const id of ids) indeg.set(id, 0);
-  for (const [f, arr] of nextOf) for (const t of arr) if (incident.has(t)) indeg.set(t, (indeg.get(t) || 0) + 1);
-  const ready = ids.filter((id) => (indeg.get(id) || 0) === 0).sort((a, b) => rank.get(b) - rank.get(a));
-  const taken = new Set(), seq = [];
-  let cur;
-  const pop = () => { ready.sort((a, b) => rank.get(b) - rank.get(a)); return ready.pop(); };
-  while ((cur = pop()) !== undefined) {
-    if (taken.has(cur)) continue;
-    taken.add(cur); seq.push(cur);
-    for (const t of nextOf.get(cur) || []) {
-      if (!incident.has(t) || taken.has(t)) continue;
-      const d = (indeg.get(t) || 0) - 1; indeg.set(t, d);
-      if (d === 0) ready.push(t);
+  const back = new Set();
+  for (const [u, arr] of nextOf) for (const v of arr) if (incident.has(v) && preRank.get(v) <= preRank.get(u)) back.add(u + "|" + v);
+
+  // 2) 剔除回边后建 DAG，Kahn 拓扑序。
+  const p2 = new Map(), n2 = new Map();
+  for (const id of ids) { p2.set(id, []); n2.set(id, []); }
+  for (const [u, arr] of nextOf) for (const v of arr) {
+    if (!incident.has(v) || back.has(u + "|" + v)) continue;
+    n2.get(u).push(v); p2.get(v).push(u);
+  }
+  const indeg = new Map(); for (const id of ids) indeg.set(id, p2.get(id).length);
+  const ready = ids.filter((id) => indeg.get(id) === 0);
+  const order = []; const taken = new Set(); const q = [...ready];
+  while (q.length) {
+    const u = q.shift(); if (taken.has(u)) continue; taken.add(u); order.push(u);
+    for (const v of n2.get(u)) { if (taken.has(v)) continue; indeg.set(v, indeg.get(v) - 1); if (indeg.get(v) === 0) q.push(v); }
+  }
+  for (const id of ids) if (!taken.has(id)) order.push(id); // 环剩余兜底
+  // 3) 层 = 最长路径深度(剔回边)。
+  const layer = new Map(); for (const id of ids) layer.set(id, 0);
+  for (const u of order) for (const v of n2.get(u)) if (layer.get(u) + 1 > layer.get(v)) layer.set(v, layer.get(u) + 1);
+  // 4) 层内排序：按前驱在拓补序中的平均位置，减少交叉。
+  const orderIx = new Map(); order.forEach((id, i) => orderIx.set(id, i));
+  const layers = new Map(); for (const id of ids) { const L = layer.get(id); if (!layers.has(L)) layers.set(L, []); layers.get(L).push(id); }
+  for (const L of layers.keys()) {
+    const arr = layers.get(L);
+    arr.sort((a, b) => {
+      const avg = (x) => { const pr = p2.get(x).map((u) => orderIx.get(u)).filter((i) => i != null); return pr.length ? pr.reduce((s, i) => s + i, 0) / pr.length : orderIx.get(x); };
+      return avg(a) - avg(b);
+    });
+    layers.set(L, arr);
+  }
+  // 5) 行(row) 需要的边属性判断
+  const edgeProp = new Map();
+  for (const e of state.edges) if (e.label === "NEXT") edgeProp.set(e.from + ">" + e.to, e.props || {});
+  const isFalseExc = (u, v) => { const pr = edgeProp.get(u + ">" + v) || {}; return pr.branch === "false" || pr.exception != null; };
+  for (const id of ids) { const p = nodePos.get(id); if (p) p.set(0, 0, 0); }
+  for (const id of ids) { const p = nodePos.get(id); if (p) p.set(0, 0, 0); }
+  // 6b) 行分配：每条分支一个唯一行(高度)。主链=0(沿真/普通边)；每遇一条 false/异常边就新开一个分支、
+  //     分配下一行(1,2,3…)，分支内(真/普通边)沿用该行；汇合点取各入边最小(回主行)。
+  //     保证每条并行/顺序分支落在各自唯一的不同高度，不重叠。
+  let branchCounter = 0;
+  const row = new Map();
+  for (const id of ids) if (p2.get(id).length === 0) row.set(id, 0);
+  for (const u of order) {
+    const ru = row.get(u);
+    for (const v of n2.get(u)) {
+      let rv;
+      if (isFalseExc(u, v)) { branchCounter++; rv = branchCounter; }
+      else rv = ru;
+      const cur = row.has(v) ? row.get(v) : 0;
+      row.set(v, Math.max(cur, rv)); // 取最大：分支保持各自唯一行,不被汇合坍缩回同一高度
     }
   }
-  for (const id of ids) if (!taken.has(id)) seq.push(id); // 环剩余节点兜底
-  // 3) 条件决策树骨架（自上而下）：从 METHOD 根条件出发，按 SUB(then嵌套)/ELSE(else分支) 递归下沉，
-  //    x 按 DFS 访问序、y 按层级(levelY)；事件(调用/Value)填在归属条件的下方一行(owner 错开)。
-  const isCond = (id) => nodeKind(id) === "Condition";
-  const condSet = new Set(ids.filter(isCond));
-  const subOf = new Map(), elseOf = new Map(), hasParent = new Set();
-  for (const e of state.edges) {
-    if (!condSet.has(e.from) || !condSet.has(e.to)) continue;
-    if (e.label === "SUB") {
-      if (!subOf.has(e.from)) subOf.set(e.from, []);
-      subOf.get(e.from).push(e.to); hasParent.add(e.to);
-    } else if (e.label === "ELSE") {
-      elseOf.set(e.from, e.to); hasParent.add(e.to);
-    }
-  }
-  let nextX = 0;
-  if (condSet.size > 0) {
-    const rootTargets = new Set();
-    for (const e of state.edges) if (e.label === "ROOT" && condSet.has(e.to)) rootTargets.add(e.to);
-    let rootConds = [...rootTargets];
-    if (rootConds.length === 0) rootConds = [...condSet].filter((c) => !hasParent.has(c));
-    if (rootConds.length === 0) rootConds = [...condSet];
-    const visitedCond = new Set();
-    // 紧凑树：x 由"叶子"决定(每叶一列 STEP，节点 x=子节点集的中点)，兄弟同层靠拢、跨度小。
-    let leafCounter = 0;
-    const kidsOf = (c) => { const k = subOf.get(c) || []; if (elseOf.has(c)) k.push(elseOf.get(c)); return k; };
-    const assignX = (c, depth) => {
-      if (visitedCond.has(c)) return;
-      visitedCond.add(c);
-      const kids = kidsOf(c);
-      if (kids.length === 0) {
-        const posX = leafCounter * DOT_LAYOUT.cw;
-        leafCounter++;
-        nodePos.get(c).set(posX, depth * DOT_LAYOUT.levelY, 0);
-        return posX;
+  for (const id of ids) if (!row.has(id)) row.set(id, 0);
+  for (const id of ids) nodePos.get(id).set(layer.get(id) * DOT_LAYOUT.cw, row.get(id) * DOT_LAYOUT.rowH, 0);
+  dotNodes = new Set(ids); dotRank.clear(); // 整个 NEXT 连通分量固定为横向分层，不参与力导
+  resolveNoOverlap(ids, Math.min(DOT_LAYOUT.cw, DOT_LAYOUT.rowH) * 0.9);
+
+}
+
+
+/** 确保固定布局内所有节点两两不重叠：任意两个节点(含事件)若小于 minSep，被对称推开；多轮迭代至稳定。
+ *  允许事件微移以保证不重叠，但推离量小、整体仍贴近各自的 (层,行) 位置。 */
+function resolveNoOverlap(ids, minSep) {
+  const arr = [];
+  for (const id of ids) { const v = nodePos.get(id); if (v) arr.push({ id, v }); }
+  for (let iter = 0; iter < 80; iter++) {
+    let moved = false;
+    for (let i = 0; i < arr.length; i++) {
+      const A = arr[i].v;
+      for (let j = i + 1; j < arr.length; j++) {
+        const B = arr[j].v;
+        const dx = B.x - A.x, dy = B.y - A.y;
+        const d2 = dx * dx + dy * dy;
+        if (d2 < 1e-9) { // 完全重合：确定性分开
+          A.x -= minSep * (i % 2 ? 1 : -1) * 0.5; B.x += minSep * (i % 2 ? 1 : -1) * 0.5; moved = true; continue;
+        }
+        if (d2 >= minSep * minSep) continue;
+        const d = Math.sqrt(d2);
+        const push = (minSep - d) / 2;
+        const ux = dx / d, uy = dy / d;
+        A.x -= ux * push; A.y -= uy * push; B.x += ux * push; B.y += uy * push;
+        moved = true;
       }
-      let mn = Infinity, mx = -Infinity;
-      for (const k of kids) { const kx = assignX(k, depth + 1); if (kx < mn) mn = kx; if (kx > mx) mx = kx; }
-      const cx = (mn + mx) / 2;
-      nodePos.get(c).set(cx, depth * DOT_LAYOUT.levelY, 0);
-      return cx;
-    };
-    for (const r of rootConds) assignX(r, 0);
-    for (const c of condSet) if (!visitedCond.has(c)) { nodePos.get(c).set(leafCounter++ * DOT_LAYOUT.cw, 0, 0); }
-  }
-  // 4) 整体居中：先把条件骨架平移到原点附近；之后再按居中后的条件坐标算自由点锚点，保证坐标一致。
-  if (condSet.size > 0) {
-    let cx = 0, cy = 0;
-    for (const id of condSet) { const p = nodePos.get(id); cx += p.x; cy += p.y; }
-    cx /= condSet.size; cy /= condSet.size;
-    for (const id of condSet) { const p = nodePos.get(id); p.x -= cx; p.y -= cy; }
-  }
-  // 事件(非条件)：不固定、交给力导；按"居中后"的条件坐标给每节点一个归属条件下方的强锚点，
-  // 使其在对应决策点附近铺开、又不被邻居斥力弹飞。
-  nextAnchors.clear();
-  if (condSet.size > 0) {
-    const firstCond = seq.find(isCond);
-    const ownerSlots = new Map();
-    let last = null;
-    for (const id of seq) {
-      if (condSet.has(id)) { last = id; continue; }
-      const owner = last != null ? last : firstCond;
-      if (owner != null) {
-        const op = nodePos.get(owner);
-        const k = ownerSlots.get(owner) || 0; ownerSlots.set(owner, k + 1);
-        nextAnchors.set(id, { x: op.x + (k + 1) * DOT_LAYOUT.bx, y: op.y + DOT_LAYOUT.body });
-        const p = nodePos.get(id);
-        p.set(op.x + (k + 1) * DOT_LAYOUT.bx, op.y + DOT_LAYOUT.body, 0); // 初始即在锚点
-      }
     }
+    if (!moved) break;
   }
-  dotNodes = condSet; dotRank.clear(); // 只固定条件骨架；其余 NEXT 节点交给力导（锚点 nextAnchors 聚拢）
-  // 5) 去重叠：固定节点靠得太近时，把可动的 Value 微微推开（主链事件保持 y=0 不动）
-  resolveFixedOverlaps(ids, 6);
 }
 
 /** 固定布局去重叠：推挤靠得过近的节点；主链事件（CalledMethod/Condition）保持原位，只动 Value。 */
@@ -2615,7 +2640,7 @@ function toggleDotLayout() {
   dotBtn.textContent = dotLayoutOn ? "NEXT:DOT 开" : "NEXT:DOT 关";
   persistViewToggles();
 }
-dotBtn.addEventListener("click", () => { closeAll(); toggleDotLayout(); });
+dotBtn.addEventListener("click", () => { if (window.__closeMenus) window.__closeMenus(); toggleDotLayout(); });
 
 // ===================== 代码查看器（右侧可折叠侧边栏） =====================
 const codeToggleEl = document.getElementById("code-toggle");
