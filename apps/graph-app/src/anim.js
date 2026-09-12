@@ -37,6 +37,11 @@ export function createTweenEngine() {
       if (i >= 0) tweens.splice(i, 1);
     },
 
+    /** 进行中的 tween 数量（0 表示没有动画在跑，主循环可据此停帧）。 */
+    count() {
+      return tweens.length;
+    },
+
     cancelAll() {
       tweens.length = 0;
     },

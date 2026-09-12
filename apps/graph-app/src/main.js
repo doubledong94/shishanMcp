@@ -64,6 +64,17 @@ const zoomEl = document.getElementById("zoom");
 // ===================== 3D 图谱可视化（对齐旧项目 shishandaimaViewer） =====================
 const tween = createTweenEngine();
 
+// ---------- 失效重绘（on-demand rendering） ----------
+// 静止时不再每帧重绘：省掉全屏 MSAA 填充 + preserveDrawingBuffer 的全屏拷贝 +
+// 391 条边的缓冲重算与上传。任何会改变画面的操作调 invalidate() 请求重绘。
+// 平板不操作时不再发烫的关键——配合"布局收敛后自动停算"，静止即零 GPU 工作。
+let _needsRender = true;   // 首帧与换图后必须重绘
+let _continuousFrames = 0; // 剩余必须连续重绘的帧数（动画/交互期间用）
+/** 请求重绘：下一帧渲染一次。 */
+function invalidate() { _needsRender = true; }
+/** 未来 n 帧持续重绘（用于 tween/拖拽等连续变化）。 */
+function invalidateFrames(n) { _continuousFrames = Math.max(_continuousFrames, n); }
+
 let scene, camera, renderer, controls; // controls = OrbitControls（仅 3D 模式使用）
 let graphGroup;
 let nodeMesh = null; // InstancedMesh（每实例一个实心圆盘，每实例颜色区分选中/悬停）
@@ -222,6 +233,7 @@ void main() {
 
 /** 重新构建节点 InstancedMesh（圆盘 + 每实例颜色与两态 alpha，对齐旧 Nodes.cpp） */
 function rebuildNodes() {
+  invalidate();
   const ids = state.nodes.map((n) => n.id);
   if (nodeMesh) { graphGroup.remove(nodeMesh); nodeMesh.geometry.dispose(); nodeMesh.material.dispose(); nodeMesh = null; }
   nodeLabels.forEach((l) => graphGroup.remove(l));
@@ -592,6 +604,7 @@ let edgeGeo = null; // 动态 BufferGeometry（容量预分配，写入活跃边
 let ePosArr = null, eDirArr = null, eColArr = null, eUvArr = null, eFlowArr = null, eAlphaArr = null, eNotchArr = null;
 
 function rebuildEdges() {
+  invalidate();
   const edges = state.edges.filter((e) => nodePos.has(e.from) && nodePos.has(e.to));
   // 保留 label(维度着色)与 props(语义标记：branch=false/exception 上色)
   edgeData = edges.map((e) => ({ from: e.from, to: e.to, label: e.label, props: e.props }));
@@ -771,7 +784,7 @@ function nodeKind(id) { const n = nodesById.get(id); return n ? (n.kind || n.lab
  * 这样函数的时序一目了然，Value 仍可见（不隐藏）、不占用主链横向步距，线更短更清爽。
  */
 function computeDotLayout() {
-  if (!dotLayoutOn) { dotNodes.clear(); nextAnchors.clear(); dotRank.clear(); return; }
+  if (!dotLayoutOn) { dotNodes.clear(); nextAnchors.clear(); dotRank.clear(); invalidate(); return; }
   const prevOf = new Map(), nextOf = new Map(), incident = new Set();
   for (const e of state.edges) {
     if (e.label !== "NEXT") continue;
@@ -783,7 +796,7 @@ function computeDotLayout() {
     prevOf.get(e.to).push(e.from);
   }
   const ids = [...incident];
-  if (ids.length === 0) { dotNodes.clear(); nextAnchors.clear(); dotRank.clear(); return; }
+  if (ids.length === 0) { dotNodes.clear(); nextAnchors.clear(); dotRank.clear(); invalidate(); return; }
   const isEvent = (id) => { const k = nodeKind(id); return k === "Condition" || k === "CalledMethod"; };
   const isValue = (id) => nodeKind(id) === "Value";
 
@@ -852,6 +865,7 @@ function computeDotLayout() {
   for (const id of ids) nodePos.get(id).set(layer.get(id) * DOT_LAYOUT.cw, row.get(id) * DOT_LAYOUT.rowH, 0);
   dotNodes = new Set(ids); dotRank.clear(); // 整个 NEXT 连通分量固定为横向分层，不参与力导
   resolveNoOverlap(ids, Math.min(DOT_LAYOUT.cw, DOT_LAYOUT.rowH) * 0.9);
+  invalidateLayout(); // DOT 重排了位置 → 需重绘，且力导须重新收敛自由点
 
 }
 
@@ -973,12 +987,32 @@ function nodeColorFor(id, out) {
 // ---------- 布局：连续力导向仿真（移植旧 FR，让节点涌动沉降） ----------
 // target/refTarget 是相邻节点的弹簧平衡距离；调大让节点摊开，连线在盘间隙里可见。
 const LAYOUT = { repulsion: 5, minDist: 1.4, refTarget: 11, target: 7, spring: 0.02, center: 0.05, temperature: 0.22 };
+// 力导收敛判定：连续 LAYOUT_SETTLE_FRAMES 帧最大位移 < LAYOUT_SETTLE_EPS 即认为已沉降，停算停绘。
+const LAYOUT_SETTLE_EPS = 0.02;
+const LAYOUT_SETTLE_FRAMES = 12;
+let layoutSettled = false;          // 已沉降 → stepLayout 直接返回，主循环也就不再请求重绘
+let _layoutStillFrames = 0;         // 连续"几乎没动"的帧数
+let _layoutPrevPos = new Map();     // 上一轮位置快照（求最大位移用）
+/** 布局需要重新计算：清沉降标记并请求重绘（换图/拖动/改参数/切 DOT 时调）。 */
+function invalidateLayout() {
+  layoutSettled = false;
+  _layoutStillFrames = 0;
+  _layoutPrevPos = new Map();
+  invalidateFrames(2);
+}
 
 function stepLayout(dt) {
   const nodes = state.nodes;
   const n = nodes.length;
   if (!n) return;
+  // 力导已沉降稳定：不再迭代，也不再请求重绘（省 CPU 与 GPU）。移动/换图/改强度会重置该标记。
+  if (layoutSettled) return;
   const k = Math.min(dt / 16.666, 2) * LAYOUT.temperature * intensityMul;
+  // 收敛检测用：本轮开始时的位置快照（结尾比对求最大位移，判断是否已沉降）。
+  if (_layoutPrevPos.size !== nodePos.size) {
+    _layoutPrevPos = new Map();
+    for (const [id, v] of nodePos) _layoutPrevPos.set(id, v.clone());
+  }
   // 力导中鼠标拖拽的节点：先快照其位置，布局计算后还原（该节点不被力导移走，其余照常动画）
   const dv0 = dragNodeId != null ? nodePos.get(dragNodeId) : null;
   _dragPin = dv0 ? dv0.clone() : null;
@@ -1082,6 +1116,25 @@ function stepLayout(dt) {
     if (dv && _dragPin) dv.copy(_dragPin);
   }
   updateNodePositions(); // 布局每帧更新实例矩阵
+  invalidate();          // 布局在动 → 需要重绘
+  // 收敛检测：本轮最大位移足够小则判定已沉降，停止迭代（拖拽中不判，松手后自然收敛）。
+  if (dragNodeId == null) {
+    let maxStep = 0;
+    for (const [id, v] of nodePos) {
+      const p = _layoutPrevPos.get(id);
+      if (!p) continue;
+      const d = Math.abs(v.x - p.x) + Math.abs(v.y - p.y) + Math.abs(v.z - p.z);
+      if (d > maxStep) maxStep = d;
+      p.copy(v);
+    }
+    if (maxStep < LAYOUT_SETTLE_EPS) {
+      if (++_layoutStillFrames >= LAYOUT_SETTLE_FRAMES) layoutSettled = true;
+    } else {
+      _layoutStillFrames = 0;
+    }
+  } else {
+    _layoutStillFrames = 0;
+  }
 }
 
 // ---------- 密度自适应大小（移植 scaleByDistance：密处小、疏处大） ----------
@@ -1126,6 +1179,7 @@ function updateLabelPositions() {
 /** 应用灰盘明暗/透明度（对齐旧项目 Nodes：未选中灰0.5·alpha0.3，选中亮灰0.9·alpha1.0，悬停 +0.2） */
 function applyHighlights() {
   updateNodeColors();
+  invalidate(); // 选中/悬停/上色变化 → 需重绘（静止时主循环跳过，这里负责唤醒）
 }
 
 // ---------- 相机 / 控制器（2D 平移缩放 + 3D 轨道） ----------
@@ -1180,6 +1234,7 @@ function applyZoom() {
     camera.position.copy(controls.target).addScaledVector(dir, d);
     controls.update();
   }
+  invalidate();
 }
 zoomEl.addEventListener("pointerdown", () => { zoomDragging = true; });
 zoomEl.addEventListener("input", applyZoom);
@@ -1197,6 +1252,7 @@ function applyIntensity() {
   const v = (+intensityEl.value || 50) / 100;
   // v<=0.5: 0.1→1（0.1×10^(2v)）；v>0.5: 1→100（100^(2v-1)）。两段在 v=0.5 处都等于 1，连续。
   intensityMul = v <= 0.5 ? 0.1 * Math.pow(10, 2 * v) : Math.pow(100, 2 * v - 1);
+  invalidateLayout(); // 温度变了 → 已沉降的布局需重新跑
 }
 intensityEl.addEventListener("input", applyIntensity);
 applyIntensity();
@@ -1544,6 +1600,7 @@ function setupInteraction() {
           drag.startY = drag.lastY = e.clientY;
           drag.moved = false;
           dragNodeId = pickNode(e.clientX, e.clientY); // 命中节点→拖节点；未命中→平移
+      if (dragNodeId != null) invalidateLayout(); // 拖节点须让力导重新开跑，否则 settled 时拖不动
         }
         // 3D：单指旋转交给 controls，这里只记录 downAt 供抬手择点
       } else if (touchPoints.size === 2) {
@@ -1581,6 +1638,7 @@ function setupInteraction() {
       const id = pickNode(e.clientX, e.clientY);
       if (id != null) {
         dragNodeId = id;
+        invalidateLayout(); // 同上：拖拽期间力导须在跑
         controls.enabled = false;
         const p = nodePos.get(id);
         _drag3d = { dir: new THREE.Vector3(), d: 0 };
@@ -1612,6 +1670,7 @@ function setupInteraction() {
       if (pinchDist > 0 && layoutMode === "2d") {
         const ratio = d / pinchDist;
         viewHeight = THREE.MathUtils.clamp(viewHeight / ratio, ZOOM_H_MIN, ZOOM_H_MAX);
+        invalidate();
       }
       pinchDist = d;
       hideTooltip();
@@ -1633,6 +1692,7 @@ function setupInteraction() {
         const t = -(_drag3d.dir.dot(raycaster.ray.origin) + _drag3d.d) / denom;
         const hit = raycaster.ray.origin.clone().add(raycaster.ray.direction.clone().multiplyScalar(t));
         nodePos.get(dragNodeId).copy(hit);
+        invalidate();
       }
       return;
     }
@@ -1649,6 +1709,7 @@ function setupInteraction() {
         const worldPerPx = viewHeight / renderer.domElement.clientHeight;
         v.x += (rx * dx - ux * dy) * worldPerPx;
         v.y += (ry * dx - uy * dy) * worldPerPx;
+        invalidate();
       }
       drag.lastX = e.clientX;
       drag.lastY = e.clientY;
@@ -1674,6 +1735,7 @@ function setupInteraction() {
         viewTarget.x += (-rx * dx + ux * dy) * worldPerPx;
         viewTarget.y += (-ry * dx + uy * dy) * worldPerPx;
         if (layoutMode === "2d") viewTarget.z = 0;
+        invalidate();
       } else if (drag.button === 1) {
         // 绕 Z 旋转（中键，对齐旧项目）
         viewRotZ += dx * 0.005;
@@ -1723,6 +1785,7 @@ function setupInteraction() {
     }
     // ---------- 鼠标 / 触控笔：原逻辑 ----------
     if (layoutMode === "3d" && dragNodeId != null) { _drag3d = null; controls.enabled = true; }
+    if (dragNodeId != null) invalidateLayout(); // 松手后让力导从新位置重新收敛
     dragNodeId = null;
     if (layoutMode === "2d" && drag.active) {
       drag.active = false;
@@ -1746,6 +1809,7 @@ function setupInteraction() {
     e.preventDefault();
     viewHeight *= 1 + e.deltaY * 0.0012;
     viewHeight = THREE.MathUtils.clamp(viewHeight, ZOOM_H_MIN, ZOOM_H_MAX);
+    invalidate();
   }, { passive: false });
 
   // 右键流光级联（shift+右键 = 反向流光，同旧项目）。
@@ -1847,6 +1911,7 @@ const FLOW_ALL_PERIOD = 1700; // 一个完整流光周期(ms)
 /** 右键点「流光」：开→所有边同步持续流光；再点→全部边停止(回到 -2 无流光)。 */
 function toggleGlobalFlow(backward) {
   flowAllActive = !flowAllActive;
+  invalidate();
   flowAllDir = backward ? -1 : 1;
   if (!flowAllActive) {
     if (edgeGeo && edgeGeo.attributes.edgeFlow) {
@@ -2044,7 +2109,9 @@ function initThree() {
   orthoCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, -1e6, 1e6);
   camera = layoutMode === "2d" ? orthoCamera : perspCamera;
 
-  renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true /** DBG 屏幕像素回读 */ });
+  // 不开 preserveDrawingBuffer：它会强制每帧把整个帧缓冲多拷一份（平板 DPR2 + MSAA 下约 22MB/帧），
+  // 是静止发烫的主要来源之一。唯一的屏幕像素回读 readScreenPixel 已删（调试改用离屏 RT 的 readNodePixel）。
+  renderer = new THREE.WebGLRenderer({ antialias: true });
   renderer.setSize(window.innerWidth, window.innerHeight);
   renderer.setPixelRatio(window.devicePixelRatio);
   app.appendChild(renderer.domElement);
@@ -2062,6 +2129,7 @@ function initThree() {
     perspCamera.aspect = w / h;
     perspCamera.updateProjectionMatrix();
     renderer.setSize(w, h); // ortho 的 left/right/top/bottom 每帧由 cameraForMode 按新窗口尺寸重算
+    invalidate();
   });
 
   lastTime = performance.now();
@@ -2077,10 +2145,21 @@ function animate(now) {
   if (dt > 100) dt = 16;
   __frame++;
 
+  // 静止时整体跳过：没有需要重绘的变化就不做任何 CPU/GPU 工作。
+  // 这正是不操作时不发烫的关键——力导收敛后 layoutSettled=true，
+  // 流光/拖拽/tween 等会各自 invalidate()，所以不会漏帧。
+  const animating = flowAllActive || tween.count() > 0 || dragNodeId != null
+    || (layoutRunning && !layoutSettled && state.nodes.length > 0);
+  if (!_needsRender && _continuousFrames <= 0 && !animating) return;
+  if (_continuousFrames > 0) _continuousFrames--;
+
   try {
     tween.update(dt);
     if (flowAllActive) updateAllFlow(now); // 整体流光：每帧同步推进所有边
     if (layoutRunning && state.nodes.length) stepLayout(dt);
+    // 只要决定渲染这一帧，就把全部派生数据更新到位。省电靠"整帧跳过"（上面 return），
+    // 而不是在渲染帧里再省——否则 hover/选中这类只置 _needsRender、不置 animating 的变化，
+    // 会出现节点已改色而边仍是旧色的问题。
     densityTick++;
     if ((densityTick & 7) === 0) updateScaleByDistance();
     updateLabelPositions();
@@ -2099,6 +2178,7 @@ function animate(now) {
       if (+zoomEl.value !== zv) zoomEl.value = String(zv);
     }
     renderer.render(scene, camera); // 关键：渲染也包进 try，出错打日志不冻结画布
+    _needsRender = false;
   } catch (err) {
     if (!__frameErrShown) {
       __frameErrShown = true;
@@ -2130,6 +2210,7 @@ function clearGraph() {
   highlightIds = new Set();
   if (historyCountEl) historyCountEl.textContent = "";
   if (historyRowsEl) historyRowsEl.innerHTML = "";
+  invalidateLayout(); // 图已清空 → 重绘空场景
 }
 
 /** 把 data 并入当前图并补齐缺失对象/位置（增量，保留已有节点位置 → 供沉降动画）。 */
@@ -2177,6 +2258,7 @@ function renderGraph(data, seedId) {
   applyFlowForGraph();
   applyHighlights();
   applyDepthMode(); // 按 2D/3D 设深度遮挡：3D 用真实 z 遮挡，2D 靠绘制序
+  invalidateLayout(); // 换图/并入新节点 → 布局重新收敛（放在最后，覆盖前面各步的 invalidate）
 }
 
 /** 深度遮挡模式：3D 启真实深度(节点/边/标签都按 z 遮挡)，2D 保持 transparent+depthTest:false 靠 renderOrder。 */
@@ -2337,8 +2419,12 @@ function syncSelectionUI() {
   dbgSelection("sync");
 }
 
-/* [DBG] 选中后读选中/未选中节点的实际渲染像素（亮暗对比） */
+/* [DBG] 选中后读选中/未选中节点的实际渲染像素（亮暗对比）。
+ * 默认关闭：每次选中会额外渲染两张全屏离屏纹理（2×W×H，平板 DPR2 下各约 22MB），
+ * 是常态开销。排查选中/上色问题时在控制台执行 __dbgSelection = true 打开。 */
+let __dbgSelection = false;
 function dbgSelection(tag) {
+  if (!__dbgSelection) return;
   console.log(`[DBG] ${tag} selectedIds.size=${selectedIds.size} nodes=${instNode.length}`);
   if (state.nodes.length > 0) {
     const selId = activeId ?? selectedIds.values().next().value;
@@ -2354,28 +2440,6 @@ function dbgSelection(tag) {
       if (px) console.log(`[DBG] renderedPixel(未选中 ${unselId}) = [${px.join(",")}]`);
     }
   }
-}
-
-/** [DBG] 直接读「屏幕画布」默认帧缓冲上某节点的实际像素（preserveDrawingBuffer） */
-function readScreenPixel(id) {
-  const p0 = nodePos.get(id);
-  if (!nodePos.has(id)) return null;
-  const W = renderer.domElement.width;
-  const H = renderer.domElement.height;
-  const p = p0.clone().project(camera);
-  const sx0 = Math.floor((p.x * 0.5 + 0.5) * W);
-  const sy0 = Math.floor((-p.y * 0.5 + 0.5) * H);
-  const bx = Math.max(0, Math.min(W - 3, sx0 - 1));
-  const by = Math.max(0, Math.min(H - 3, sy0 - 1));
-  const gl = renderer.getContext();
-  const buf = new Uint8Array(4 * 9);
-  gl.readPixels(bx, H - by - 3, 3, 3, gl.RGBA, gl.UNSIGNED_BYTE, buf);
-  let best = [0, 0, 0, 0], bl = -1;
-  for (let i = 0; i < 9; i++) {
-    const r = buf[i * 4], g = buf[i * 4 + 1], b = buf[i * 4 + 2], a = buf[i * 4 + 3];
-    if (r + g + b > bl) { bl = r + g + b; best = [r, g, b, a]; }
-  }
-  return best;
 }
 
 /** [DBG] 把场景渲到离屏纹理，在节点屏幕位置采 3x3 取最亮 RGBA（抗布局漂移误采） */
@@ -2397,6 +2461,7 @@ function readNodePixel(id) {
   renderer.readRenderTargetPixels(rt, bx, H - by - 3, 3, 3, buf);
   renderer.setRenderTarget(null);
   rt.dispose();
+  invalidate(); // 渲到离屏 RT 后屏幕缓冲已失效，须重绘一次
   let best = [0, 0, 0, 0];
   let bestLum = -1;
   for (let i = 0; i < 9; i++) {
@@ -2738,6 +2803,7 @@ if (__autopick) {
 // ---------- 控件 ----------
 modeBtn.addEventListener("click", () => {
   layoutMode = layoutMode === "2d" ? "3d" : "2d";
+  invalidateLayout(); // 3D 会加 z 抖动、2D 会压平 z，都改变了位置 → 重新收敛
   controls.enabled = layoutMode === "3d";
   modeBtn.textContent = layoutMode === "2d" ? "切到 3D" : "切到 2D";
   if (layoutMode === "3d") {
@@ -2759,6 +2825,7 @@ modeBtn.addEventListener("click", () => {
 layoutBtn.addEventListener("click", () => {
   layoutRunning = !layoutRunning;
   layoutBtn.textContent = layoutRunning ? "暂停布局" : "继续布局";
+  invalidateLayout(); // 从暂停恢复时须重新收敛；暂停时也重绘一次
   // 暂停即"用户停手"：强制保存一次当前布局，保证停下来的状态就是被持久化的状态。
   if (!layoutRunning) saveLayoutIfChanged(true);
 });
@@ -2791,6 +2858,7 @@ function restartLayout() {
       layoutMode === "2d" ? 0 : (Math.random() - 0.5) * 10,
     );
   }
+  invalidateLayout(); // 重新撒点 → 重绘 + 重新收敛
   if (dotLayoutOn) computeDotLayout(); // 重新固定 DOT 骨架；自由点保留上面打散的位置
   if (!layoutRunning) {
     layoutRunning = true;
@@ -2846,6 +2914,7 @@ function toggleDotLayout() {
       }
     }
   }
+  invalidateLayout(); // 切回力导后位置已还原/扰动，须重新收敛
   dotBtn.textContent = dotLayoutOn ? "NEXT:DOT 开" : "NEXT:DOT 关";
   persistViewToggles();
 }
@@ -3275,6 +3344,7 @@ async function locate() {
     const data = await res.json();
     renderGraph(data.view); // 增量并入，命中节点高亮
     highlightIds = new Set(data.matches.map((m) => m.id));
+    invalidate();
     applyHighlights();
     const inView = new Set(state.nodes.map((n) => n.id));
     renderLocateMatches(data.matches, inView);
