@@ -678,6 +678,16 @@ function updateEdgeBuffers() {
       eColArr[(o + 3) * 3] = _EDGE_C0.r; eColArr[(o + 3) * 3 + 1] = _EDGE_C0.g; eColArr[(o + 3) * 3 + 2] = _EDGE_C0.b;
       eColArr[(o + 1) * 3] = _EDGE_C0.r; eColArr[(o + 1) * 3 + 1] = _EDGE_C0.g; eColArr[(o + 1) * 3 + 2] = _EDGE_C0.b;
       eColArr[(o + 2) * 3] = _EDGE_C0.r; eColArr[(o + 2) * 3 + 1] = _EDGE_C0.g; eColArr[(o + 2) * 3 + 2] = _EDGE_C0.b;
+      // 语义标记色覆盖（属维度着色，随其一起开/关）：branch=false(假/else 路径)→橙；
+      // exception(catch 异常入口)→紫；exception 优先。若放在 dimEdgeOn 之外，这两类边会
+      // 无论开关都恒为上色，既盖掉维度色也盖掉流色，与图例里"语义标记"同属一栏的语义不符。
+      const sem = edgeSemanticColorFor(e);
+      if (sem) {
+        for (let k = 0; k < 4; k++) {
+          const oo = (o + k) * 3;
+          eColArr[oo] = sem.r; eColArr[oo + 1] = sem.g; eColArr[oo + 2] = sem.b;
+        }
+      }
     } else {
       // 颜色：端点节点色渐变（起点色在顶点0,3，终点色在1,2），对齐旧 FlowLine::setColors
       nodeColorFor(e.from, _EDGE_C0);
@@ -686,14 +696,6 @@ function updateEdgeBuffers() {
       eColArr[(o + 3) * 3] = _EDGE_C0.r; eColArr[(o + 3) * 3 + 1] = _EDGE_C0.g; eColArr[(o + 3) * 3 + 2] = _EDGE_C0.b;
       eColArr[(o + 1) * 3] = _EDGE_C1.r; eColArr[(o + 1) * 3 + 1] = _EDGE_C1.g; eColArr[(o + 1) * 3 + 2] = _EDGE_C1.b;
       eColArr[(o + 2) * 3] = _EDGE_C1.r; eColArr[(o + 2) * 3 + 1] = _EDGE_C1.g; eColArr[(o + 2) * 3 + 2] = _EDGE_C1.b;
-    }
-    // 语义标记色覆盖：branch=false(假/else 路径)→橙；exception(catch 异常入口)→紫；exception 优先。
-    const sem = edgeSemanticColorFor(e);
-    if (sem) {
-      for (let k = 0; k < 4; k++) {
-        const oo = (o + k) * 3;
-        eColArr[oo] = sem.r; eColArr[oo + 1] = sem.g; eColArr[oo + 2] = sem.b;
-      }
     }
     // alpha：顶点0,3=起点 alpha，1,2=终点 alpha（对齐旧 FlowLine，端点选中则不透明、未选中半透明）。
     // 维度色已是 sRGB 直存（色相正确），半透明(0.3)下也显示正确色相，无需再强制不透明。
