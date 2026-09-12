@@ -85,6 +85,8 @@ let nodeLabels = new Map(); // node id -> Sprite（仅选中/悬停显示）
 let nodesById = new Map(); // id -> node
 let nodePos = new Map(); // id -> THREE.Vector3
 let edgeMesh = null; // InstancedMesh（相机朝向带状边 + 流光）
+// DOT 行参考线：每行一条极细水平线，标出 row 的位置（仅 DOT 布局下显示）。
+let rowLines = null;   // THREE.LineSegments
 let edgeData = []; // {from,to}，与边缓冲索引对齐
 let state = { nodes: [], edges: [] };
 let selectedIds = new Set(); // 多选集合（对齐旧项目 nodesObj->selected）
@@ -784,7 +786,7 @@ function nodeKind(id) { const n = nodesById.get(id); return n ? (n.kind || n.lab
  * 这样函数的时序一目了然，Value 仍可见（不隐藏）、不占用主链横向步距，线更短更清爽。
  */
 function computeDotLayout() {
-  if (!dotLayoutOn) { dotNodes.clear(); nextAnchors.clear(); dotRank.clear(); invalidate(); return; }
+  if (!dotLayoutOn) { dotNodes.clear(); nextAnchors.clear(); dotRank.clear(); clearRowLines(); invalidate(); return; }
   const prevOf = new Map(), nextOf = new Map(), incident = new Set();
   for (const e of state.edges) {
     if (e.label !== "NEXT") continue;
@@ -796,7 +798,7 @@ function computeDotLayout() {
     prevOf.get(e.to).push(e.from);
   }
   const ids = [...incident];
-  if (ids.length === 0) { dotNodes.clear(); nextAnchors.clear(); dotRank.clear(); invalidate(); return; }
+  if (ids.length === 0) { dotNodes.clear(); nextAnchors.clear(); dotRank.clear(); clearRowLines(); invalidate(); return; }
   const isEvent = (id) => { const k = nodeKind(id); return k === "Condition" || k === "CalledMethod"; };
   const isValue = (id) => nodeKind(id) === "Value";
 
@@ -844,29 +846,108 @@ function computeDotLayout() {
   for (const e of state.edges) if (e.label === "NEXT") edgeProp.set(e.from + ">" + e.to, e.props || {});
   const isFalseExc = (u, v) => { const pr = edgeProp.get(u + ">" + v) || {}; return pr.branch === "false" || pr.exception != null; };
   for (const id of ids) { const p = nodePos.get(id); if (p) p.set(0, 0, 0); }
-  for (const id of ids) { const p = nodePos.get(id); if (p) p.set(0, 0, 0); }
-  // 6b) 行分配：每条分支一个唯一行(高度)。主链=0(沿真/普通边)；每遇一条 false/异常边就新开一个分支、
-  //     分配下一行(1,2,3…)，分支内(真/普通边)沿用该行；汇合点取各入边最小(回主行)。
-  //     保证每条并行/顺序分支落在各自唯一的不同高度，不重叠。
-  let branchCounter = 0;
+  // 6b) 行分配：以"分支树"递归排布，行号相对父节点、非全局。
+  //     每个节点继承父节点的行；有分叉时先给非 false/catch 支（行 = 父行 + 1），
+  //     递归排完整支得到它占用的行数 n，再给 false/catch 支：
+  //       该支首节点已有行 → 空分支（直连汇合点），不分配；
+  //       否则 → 行 = 父行 + 1 + n。
+  //     故深链不占额外行，只有真正分叉出的支才把兄弟往下推——每支只与兄弟支避开。
+  // 判分叉按去重后的后继数：同一 u→v 的多条 NEXT(不同 props) 不是分叉，不该白占两行。
+  const succ = new Map();
+  for (const u of ids) succ.set(u, [...new Set(n2.get(u))]);
+  // 支序：非 false/catch 支在前、false/catch 支在后；同组按 id，保证结果确定。
+  const branchOrder = (u) => succ.get(u).slice().sort((a, b) => {
+    const fa = isFalseExc(u, a) ? 1 : 0, fb = isFalseExc(u, b) ? 1 : 0;
+    return (fa - fb) || (a < b ? -1 : a > b ? 1 : 0);
+  });
+  // 汇入边数(去重)：汇合点降行用——汇入 n(>1) 条则行号减 (n-1)。
+  const inDeg = new Map(ids.map((id) => [id, new Set(p2.get(id)).size]));
   const row = new Map();
-  for (const id of ids) if (p2.get(id).length === 0) row.set(id, 0);
-  for (const u of order) {
-    const ru = row.get(u);
-    for (const v of n2.get(u)) {
-      let rv;
-      if (isFalseExc(u, v)) { branchCounter++; rv = branchCounter; }
-      else rv = ru;
-      const cur = row.has(v) ? row.get(v) : 0;
-      row.set(v, Math.max(cur, rv)); // 取最大：分支保持各自唯一行,不被汇合坍缩回同一高度
+  const placed = new Set();
+  /** 递归排以 v 为根的一支，返回该支用到的最大行。 */
+  const layout = (v) => {
+    let maxRow = row.get(v);
+    const nbs = branchOrder(v);
+    const fork = nbs.length >= 2;
+    let next = row.get(v) + 1;                // 分叉时第 1 支从"父行+1"起
+    for (const w of nbs) {
+      if (placed.has(w)) continue;            // 空分支/汇合点：首节点已有行，不再分配
+      let rv = fork ? next : row.get(v);      // 分叉 → 父行+1+n；链 → 继承父行
+      // 汇合降行：w 有 n(>1) 条汇入边 → 减 (n-1) 拉回上方，各支在此收拢。
+      // 必须此刻降：下游继承的是 w 的行(rv)，降后的值才会沿链传播下去。
+      // 不设下限：减过 0 就落到负行（汇合很深时上面本就没有对应的行，负行是诚实的表示）。
+      const n = inDeg.get(w);
+      if (n >= 2) rv -= n - 1;
+      row.set(w, rv);
+      placed.add(w);
+      const m = layout(w);
+      if (m > maxRow) maxRow = m;
+      next = m + 1;                           // 下一支接在本支最高行之后
     }
-  }
-  for (const id of ids) if (!row.has(id)) row.set(id, 0);
+    return maxRow;
+  };
+  const roots = ids.filter((id) => p2.get(id).length === 0).sort();
+  for (const r of roots) { row.set(r, 0); placed.add(r); }
+  for (const r of roots) layout(r);
+  // 兜底：环内节点从根不可达，各作一支的根单独排。
+  for (const id of ids) if (!placed.has(id)) { row.set(id, 0); placed.add(id); layout(id); }
   for (const id of ids) nodePos.get(id).set(layer.get(id) * DOT_LAYOUT.cw, row.get(id) * DOT_LAYOUT.rowH, 0);
   dotNodes = new Set(ids); dotRank.clear(); // 整个 NEXT 连通分量固定为横向分层，不参与力导
   resolveNoOverlap(ids, Math.min(DOT_LAYOUT.cw, DOT_LAYOUT.rowH) * 0.9);
+  buildRowLines(row); // 每行一条极细参考线（标记行位置）
   invalidateLayout(); // DOT 重排了位置 → 需重绘，且力导须重新收敛自由点
 
+}
+
+/**
+ * 为每个 row 画一条极细的水平参考线，标出该行的位置（仅 DOT 布局下显示）。
+ * x 范围取自所有 DOT 节点的实际包围盒再外扩一点，使线覆盖整条链。
+ */
+function buildRowLines(row) {
+  clearRowLines();
+  if (!dotLayoutOn || !row || row.size === 0) return;
+  const rows = [...new Set(row.values())].sort((a, b) => a - b);
+  let minX = Infinity, maxX = -Infinity;
+  for (const id of dotNodes) {
+    const v = nodePos.get(id);
+    if (!v) continue;
+    if (v.x < minX) minX = v.x;
+    if (v.x > maxX) maxX = v.x;
+  }
+  if (!Number.isFinite(minX)) return;
+  const pad = DOT_LAYOUT.cw;                 // 两端各外扩一格，线不贴住首尾节点
+  const x0 = minX - pad, x1 = maxX + pad;
+  const pts = new Float32Array(rows.length * 2 * 3);
+  rows.forEach((r, i) => {
+    const y = r * DOT_LAYOUT.rowH;
+    pts[i * 6 + 0] = x0; pts[i * 6 + 1] = y; pts[i * 6 + 2] = 0;
+    pts[i * 6 + 3] = x1; pts[i * 6 + 4] = y; pts[i * 6 + 5] = 0;
+  });
+  const g = new THREE.BufferGeometry();
+  // 属性名必须是内置的 "position"：LineBasicMaterial 走默认着色器，只认 position。
+  // （边用的是自定义 ShaderMaterial，才能用 edgePos 这类自定义名。）
+  g.setAttribute("position", new THREE.BufferAttribute(pts, 3));
+  const m = new THREE.LineBasicMaterial({
+    color: 0xffffff,
+    transparent: true,
+    opacity: 0.22,
+    depthWrite: false,   // 与边一致：不写深度，避免影响后续绘制
+    depthTest: false,    // 2D 默认关（靠 renderOrder）；3D 由 applyDepthMode 打开
+  });
+  rowLines = new THREE.LineSegments(g, m);
+  // 比边(0)/节点(1)更早画：节点圆盘与边会盖住它，行线只在空白处可见。
+  rowLines.renderOrder = -1;
+  rowLines.frustumCulled = false;
+  graphGroup.add(rowLines);
+}
+
+/** 移除行参考线（退出 DOT / 清图时调）。 */
+function clearRowLines() {
+  if (!rowLines) return;
+  graphGroup.remove(rowLines);
+  if (rowLines.geometry) rowLines.geometry.dispose();
+  if (rowLines.material) rowLines.material.dispose();
+  rowLines = null;
 }
 
 
@@ -2199,6 +2280,7 @@ function clearGraph() {
   nodePos.clear();
   dotNodes = new Set();
   nextAnchors = new Map();
+  clearRowLines();
   edgeMesh = null;
   edgeGeo = null;
   edgeData = [];
@@ -2276,6 +2358,10 @@ function applyDepthMode() {
   }
   for (const [, lab] of nodeLabels) { // 标签：3D 也被近节点遮挡(不再恒置顶)
     if (lab.material) lab.material.depthTest = d3;
+  }
+  if (rowLines && rowLines.material) {
+    rowLines.material.depthTest = d3;
+    rowLines.material.needsUpdate = true;
   }
 }
 
@@ -2895,6 +2981,7 @@ function toggleDotLayout() {
     computeDotLayout();
   } else {
     dotNodes = new Set();
+    clearRowLines(); // 退出 DOT → 移除行参考线
     if (_preDotPos && _preDotPos.size) {
       // 还原进入 DOT 前的力导坐标（而非随机扰动）：切回来即回到原布局，力导从那里继续沉降。
       let restored = 0;
