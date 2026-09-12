@@ -180,6 +180,39 @@ export class ApiController {
     return this.graph.getCurrent(project);
   }
 
+  /**
+   * 某项目某分组的力导布局（stableId → [x,y,z]）。前端加载图后据此恢复上次的力导位置，
+   * 使刷新页面不只是恢复图、也恢复它的布局。group 缺省为当前工作图（__current__）。
+   */
+  @Get("graph/layout")
+  getGraphLayout(@Query("project") project?: string, @Query("group") group?: string) {
+    if (!project) {
+      throw new BadRequestException("需要 project 参数");
+    }
+    return this.graph.readLayout(project, group || GraphService.LAYOUT_GROUP_CURRENT);
+  }
+
+  /** 保存力导布局（前端定时/关键时机上报）。pos 为 { stableId: [x,y,z] }。 */
+  @Post("graph/layout")
+  saveGraphLayout(
+    @Body()
+    body: {
+      project?: string;
+      group?: string;
+      mode?: string;
+      pos?: Record<string, number[]>;
+    },
+  ) {
+    if (!body.project || !body.pos || typeof body.pos !== "object") {
+      throw new BadRequestException("需要 project 和 pos 参数");
+    }
+    return this.graph.saveLayout(
+      body.project,
+      body.group || GraphService.LAYOUT_GROUP_CURRENT,
+      { mode: body.mode, pos: body.pos },
+    );
+  }
+
   /** 用一份已保存视图整图替换当前工作图（含该视图的搜索历史），返回替换后的 current 概况。 */
   @Post("graph/restore")
   restoreCurrent(@Body() body: { project?: string; viewId?: string }) {

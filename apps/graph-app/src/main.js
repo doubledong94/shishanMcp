@@ -1188,6 +1188,100 @@ function applyIntensity() {
 intensityEl.addEventListener("input", applyIntensity);
 applyIntensity();
 
+// ---------- 力导布局持久化（后端 __layout__.json）----------
+// 刷新页面时不仅恢复"当前图"，也恢复它的力导布局：把节点坐标按 stableId 存到后端，
+// 加载图时优先套用。只涉及力导；DOT 骨架布局由 computeDotLayout 确定性重算，无需持久化。
+//
+// 键用 stableId（Neo4j 的 id 属性 = SCIP 稳定符号 id）而非 nodePos 的 node-<identity>：
+// identity 重建索引后会变，stableId 稳定，布局才能在重建后继续套用。
+const LAYOUT_SAVE_MS = 10000;  // 定时保存间隔
+const LAYOUT_GROUP_CURRENT = "__current__"; // "当前工作图"分组（与后端约定一致）
+
+let layoutGroup = LAYOUT_GROUP_CURRENT; // 当前渲染的图所属分组：__current__ 或某历史视图 id
+let _layoutSavedSig = "";               // 上次已上报的坐标签名（判断"有无变动"）
+let _restoredPos = null;                // 本次加载预取到的 { stableId: [x,y,z] }，供 renderGraph 套用
+let _layoutPrefetchPending = false;     // 布局预取进行中：轮询等它就绪再渲染，避免随机撒点抢先
+// 进入 DOT 前的力导坐标快照：DOT 会重排所有节点（被固定的 + 受影响的自由点），
+// 关掉 DOT 时用它还原，使"切到 DOT 再切回来"不会丢掉原来跑好的力导布局。
+let _preDotPos = null;
+
+/** 收集当前所有节点坐标，键为 stableId（无 stableId 的节点跳过）。 */
+function collectLayoutPos() {
+  const out = {};
+  for (const n of state.nodes) {
+    const v = nodePos.get(n.id);
+    if (v && n.stableId) out[n.stableId] = [v.x, v.y, v.z];
+  }
+  return out;
+}
+
+/**
+ * 坐标签名，用于判断"布局是否还在动"（没动就不发请求）。**全量**比对，不做抽样：
+ * 抽样会在"只有未采样的节点移动"时漏判（实测单节点移动漏报率可达 95%），
+ * 而全量代价极低——379 节点 <1ms，5 万节点也仅几毫秒，且每 10s 才算一次。
+ * 坐标量化到 0.1（视觉无差别），避免浮点噪声导致"以为在动"而反复上报。
+ */
+function layoutSignature(pos) {
+  const keys = Object.keys(pos).sort();
+  let h = keys.length;
+  for (let i = 0; i < keys.length; i++) {
+    const p = pos[keys[i]];
+    for (let k = 0; k < 3; k++) h = (h * 31 + Math.round(p[k] * 10)) >>> 0;
+  }
+  return h.toString(36);
+}
+
+/** 预取某分组的布局坐标（{ stableId: [x,y,z] }）。失败/无则返回 null（走随机撒点）。 */
+async function fetchLayoutPos(project, group) {
+  try {
+    const res = await fetch(
+      `/api/graph/layout?project=${encodeURIComponent(project)}&group=${encodeURIComponent(group)}`,
+    );
+    if (!res.ok) return null;
+    const data = await res.json();
+    const pos = data && data.pos;
+    return pos && Object.keys(pos).length ? pos : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 上报布局。默认仅在坐标较上次有变化时发请求；force=true 忽略签名比较（用于暂停/隐藏/切图等
+ * 关键时机，确保最后一次状态落盘）。失败静默——持久化不该影响主流程。
+ */
+function saveLayoutIfChanged(force = false, keepalive = false) {
+  const project = projectSel.value;
+  if (!project) return;
+  // DOT 模式下节点位置由 computeDotLayout 强制分层，不是力导的结果。此时上报会把 DOT 坐标
+  // 写进"力导布局"，覆盖掉用户此前跑出来的布局（切回力导就还原不回去了）。故一律不记录。
+  if (dotLayoutOn) return;
+  const pos = collectLayoutPos();
+  if (Object.keys(pos).length === 0) return;
+  const sig = `${layoutGroup}|${layoutSignature(pos)}`;
+  if (!force && sig === _layoutSavedSig) return;
+  _layoutSavedSig = sig;
+  try {
+    fetch("/api/graph/layout", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ project, group: layoutGroup, mode: layoutMode, pos }),
+      keepalive, // 页面卸载时也要发得出去
+    }).catch(() => {});
+  } catch { /* ignore */ }
+}
+
+// 定时保存：仅在布局运行时上报（暂停后位置不再变，空转无意义）。
+setInterval(() => {
+  if (layoutRunning) saveLayoutIfChanged();
+}, LAYOUT_SAVE_MS);
+
+// 关键时机：页面隐藏/卸载前强制保存一次（用 keepalive 保证请求不被中断）。
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "hidden") saveLayoutIfChanged(true, true);
+});
+window.addEventListener("beforeunload", () => saveLayoutIfChanged(true, true));
+
 function centerView() {
   const nodes = state.nodes;
   if (!nodes.length) return;
@@ -2033,10 +2127,16 @@ function renderGraph(data, seedId) {
   for (const n of state.nodes) nodesById.set(n.id, n);
 
   const seedPos = seedId ? nodePos.get(seedId) : null;
+  // 已持久化的布局（本次 load 预取）：有则按 stableId 套用，使刷新后回到上次的位置。
+  const restored = _restoredPos;
   for (const n of state.nodes) {
     if (nodePos.has(n.id)) continue;
     const p = new THREE.Vector3();
-    if (seedPos) {
+    const rp = restored && n.stableId ? restored[n.stableId] : null;
+    if (Array.isArray(rp) && rp.length >= 2 && rp.every((v) => typeof v === "number")) {
+      // 恢复历史坐标；2D 下强制 z=0（布局是 2D 的，避免历史 z 把节点顶出平面）。
+      p.set(rp[0], rp[1], layoutMode === "2d" ? 0 : rp[2] || 0);
+    } else if (seedPos) {
       p.copy(seedPos).add(new THREE.Vector3((Math.random() - 0.5) * 10, (Math.random() - 0.5) * 10, 0));
     } else {
       p.set((Math.random() - 0.5) * 30, (Math.random() - 0.5) * 30, layoutMode === "2d" ? 0 : (Math.random() - 0.5) * 10);
@@ -2044,10 +2144,17 @@ function renderGraph(data, seedId) {
     nodePos.set(n.id, p);
     nodeScale.set(n.id, 1);
   }
+  // 恢复用的坐标一次性：并入的新节点仍走随机/种子撒点（老节点已被 nodePos.has 跳过）。
+  if (isFresh) _restoredPos = null;
   rebuildNodes(); // 重建 InstancedMesh（节点数变化时）
 
   rebuildEdges();
-  if (dotLayoutOn) computeDotLayout(); // NEXT 节点用 dot 分层布局并固定
+  if (dotLayoutOn) {
+    // 页面带着 DOT 开关刷新时，上面刚按 _restoredPos 套用了力导布局。若不留快照，之后再关掉
+    // DOT 就只能随机扰动、把这份恢复出来的布局丢掉。故在 DOT 接管前把它存为"DOT 前的力导布局"。
+    snapshotPreDotPos();
+    computeDotLayout(); // NEXT 节点用 dot 分层布局并固定
+  }
   if (isFresh) centerView(); // 仅在全新加载时居中；增量并入（探索/定位）不跳相机
   statsEl.textContent = `${state.nodes.length} 节点 · ${state.edges.length} 边`;
   errorEl.textContent = "";
@@ -2466,6 +2573,9 @@ async function pollCurrent() {
   const project = projectSel.value;
   if (!project) return;
   if (viewSel.value !== "") return; // 用户 pinned 了某个历史视图，不跟随
+  // 首帧防竞态：load() 的布局预取是异步的，若本轮轮询先于它完成就撒点渲染，节点会被随机
+  // 定位并占住 nodePos（renderGraph 对已有位置直接跳过），预取到的布局反而失效。等预取就绪。
+  if (_restoredPos === null && _layoutPrefetchPending) return;
   try {
     const res = await fetch(`/api/graph/current?project=${encodeURIComponent(project)}`);
     if (!res.ok) return;
@@ -2512,8 +2622,17 @@ async function load() {
     errorEl.textContent = "请先选择项目";
     return;
   }
+  // 换图/换项目前，先把当前这张图的布局强制存到它自己的分组——否则分组一切换，
+  // 本次的坐标就会被当成新图的布局上报，把新图已有的布局覆盖掉。
+  saveLayoutIfChanged(true);
   let viewId = viewSel.value;
   if (viewId === "__current__") viewId = ""; // 兼容直达当前工作图的 URL
+  // 布局分组随图切换；并预取该分组的布局，供 renderGraph 撒点时套用。
+  layoutGroup = viewId || LAYOUT_GROUP_CURRENT;
+  _layoutPrefetchPending = true;
+  _restoredPos = await fetchLayoutPos(project, layoutGroup);
+  _layoutPrefetchPending = false;
+  _layoutSavedSig = ""; // 新图重新开始比较签名
   if (!viewId) {
     // 实时跟随：直接读当前累积工作图（query_graph 增量并入的）
     const res = await fetch(`/api/graph/current?project=${encodeURIComponent(project)}`);
@@ -2627,20 +2746,91 @@ modeBtn.addEventListener("click", () => {
 layoutBtn.addEventListener("click", () => {
   layoutRunning = !layoutRunning;
   layoutBtn.textContent = layoutRunning ? "暂停布局" : "继续布局";
+  // 暂停即"用户停手"：强制保存一次当前布局，保证停下来的状态就是被持久化的状态。
+  if (!layoutRunning) saveLayoutIfChanged(true);
+});
+
+const layoutRestartBtn = document.getElementById("layout-restart-btn");
+/**
+ * 重跑力导布局：丢弃当前坐标，重新随机撒点，让力导从零开始沉降。
+ *
+ * 与"暂停/继续"不同——那是保留位置继续迭代，这里是把布局真正重置一遍（比如调完布局速度后想重新
+ * 看一遍沉降，或当前布局被拖乱了想重来）。
+ *
+ * DOT 模式下只重置自由节点：被 NEXT 固定的节点位置由 computeDotLayout 决定，随机撒点会被
+ * 随后的 computeDotLayout 覆盖，等于白撒；故此时重算 DOT 骨架、只把自由点打散。
+ *
+ * 不立即上报：随机态没有保存价值，让 10s 定时器在沉降后按新位置自然落盘（旧布局即被替换，
+ * 这正是"重来"的语义）。同时清掉 DOT 前快照——用户明确要求重来，不该再留着旧布局可回退。
+ */
+function restartLayout() {
+  if (!state.nodes.length) return;
+  _preDotPos = null;
+  _layoutSavedSig = "";
+  _restoredPos = null;
+  const spread = 30;
+  for (const nd of state.nodes) {
+    const v = nodePos.get(nd.id);
+    if (!v) continue;
+    v.set(
+      (Math.random() - 0.5) * spread,
+      (Math.random() - 0.5) * spread,
+      layoutMode === "2d" ? 0 : (Math.random() - 0.5) * 10,
+    );
+  }
+  if (dotLayoutOn) computeDotLayout(); // 重新固定 DOT 骨架；自由点保留上面打散的位置
+  if (!layoutRunning) {
+    layoutRunning = true;
+    layoutBtn.textContent = "暂停布局";
+  }
+  centerView(); // 重新取景，避免重排后节点跑出视口
+  toast("已重跑力导布局");
+}
+layoutRestartBtn.addEventListener("click", () => {
+  if (window.__closeMenus) window.__closeMenus();
+  // 二次确认：重跑会丢弃当前布局（含已保存的那份），不可撤销。
+  if (!window.confirm("重跑布局会丢弃当前布局并重新随机撒点，且已保存的布局也会被覆盖。确定继续？")) {
+    return;
+  }
+  restartLayout();
 });
 
 // NEXT:DOT 开关：NEXT 连接节点用 dot 分层布局并固定，其余节点力导
 const dotBtn = document.getElementById("dot-btn");
+/** 记录当前坐标作为"DOT 前的力导布局"。DOT 接管位置前调用（开 DOT 时、或渲染时发现已在 DOT 模式）。 */
+function snapshotPreDotPos() {
+  _preDotPos = new Map();
+  for (const nd of state.nodes) {
+    const v = nodePos.get(nd.id);
+    if (v) _preDotPos.set(nd.id, v.clone());
+  }
+}
+
 function toggleDotLayout() {
   dotLayoutOn = !dotLayoutOn;
   if (dotLayoutOn) {
+    // 先快照当前力导坐标，再让 DOT 接管位置。
+    snapshotPreDotPos();
     computeDotLayout();
   } else {
     dotNodes = new Set();
-    // 解除固定的 dot 节点：给个随机扰动，让力导能重新摊开
-    for (const nd of state.nodes) {
-      const v = nodePos.get(nd.id);
-      if (v) { v.x += (Math.random() - 0.5) * 6; v.y += (Math.random() - 0.5) * 6; }
+    if (_preDotPos && _preDotPos.size) {
+      // 还原进入 DOT 前的力导坐标（而非随机扰动）：切回来即回到原布局，力导从那里继续沉降。
+      let restored = 0;
+      for (const nd of state.nodes) {
+        const v = nodePos.get(nd.id);
+        const p = _preDotPos.get(nd.id);
+        if (v && p) { v.copy(p); restored++; }
+      }
+      _preDotPos = null;
+      // 旧快照里没有的节点（DOT 期间并入的新节点）仍在 DOT 落点，力导会自然把它们摊开。
+      if (restored) toast("已恢复 DOT 前的力导布局");
+    } else {
+      // 没有快照（如刷新后直接处于 DOT、或图换过）→ 退回原来的随机扰动，让力导能重新摊开。
+      for (const nd of state.nodes) {
+        const v = nodePos.get(nd.id);
+        if (v) { v.x += (Math.random() - 0.5) * 6; v.y += (Math.random() - 0.5) * 6; }
+      }
     }
   }
   dotBtn.textContent = dotLayoutOn ? "NEXT:DOT 开" : "NEXT:DOT 关";
@@ -3135,6 +3325,10 @@ loadProjects().then(() => {
     viewSel.value = decodeURIComponent(m[2]);
     load();
     resetCodeTree();
+  } else {
+    // 无 hash：停留"实时跟随当前工作图"。这里也要预取布局——否则 pollCurrent 首次
+    // renderGraph 时 _restoredPos 还是 null，节点会随机撒点、刷新后布局丢失。
+    load();
   }
 });
 projectSel.addEventListener("change", () => {

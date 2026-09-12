@@ -557,7 +557,10 @@ export class GraphService {
     try {
       return fs
         .readdirSync(dir)
-        .filter((f) => f.endsWith(".json") && f !== "__current__.json")
+        // 排除非"视图"的旁挂文件：__current__（当前工作图）、__layout__（力导布局）。
+        .filter(
+          (f) => f.endsWith(".json") && f !== "__current__.json" && f !== "__layout__.json",
+        )
         .map((f) => {
           try {
             const raw = JSON.parse(fs.readFileSync(path.join(dir, f), "utf8")) as {
@@ -602,6 +605,91 @@ export class GraphService {
     return id;
   }
 
+  // ---------- 力导布局持久化 ----------
+  //
+  // 每项目一个 <root>/projects/<project>/__layout__.json，按"图分组"存力导节点坐标。
+  // 与视图文件同目录、同源持久化；单独一个文件，不污染 __current__.json 与历史视图的格式。
+  //
+  // 分组键：__current__（当前工作图）或某历史视图的 viewId——不同图节点集合不同，位置不可混用。
+  // 坐标键用节点的 stableId（Neo4j 的 id 属性 = SCIP 稳定符号 id），**不能用前端的 node-<identity>**：
+  // identity 是 Neo4j 内部 id，重建索引后全变；stableId 跨重建稳定，布局才能在重建后继续套用。
+
+  /** 布局分组标识：当前工作图。 */
+  static readonly LAYOUT_GROUP_CURRENT = "__current__";
+  /** 单组坐标条目上限：超大图不上报，避免文件与请求体失控。 */
+  static readonly MAX_LAYOUT_NODES = 50_000;
+
+  private layoutPath(project: string): string {
+    return path.join(this.data.getRoot(), "projects", project, "__layout__.json");
+  }
+
+  /** 读整份布局文件（分组 → 条目）。不存在/损坏一律返回 {}，绝不影响页面加载。 */
+  private readAllLayout(project: string): Record<string, LayoutEntry> {
+    try {
+      const raw = JSON.parse(fs.readFileSync(this.layoutPath(project), "utf8")) as unknown;
+      if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
+      return raw as Record<string, LayoutEntry>;
+    } catch {
+      return {};
+    }
+  }
+
+  /** 读某分组的布局：{ group, mode, at, pos:{stableId:[x,y,z]} }；无则 pos 为空。 */
+  readLayout(project: string, group: string): { project: string; group: string } & LayoutEntry {
+    const all = this.readAllLayout(project);
+    const e = all[group];
+    return {
+      project,
+      group,
+      at: e?.at || "",
+      mode: e?.mode,
+      pos: e?.pos && typeof e.pos === "object" ? e.pos : {},
+    };
+  }
+
+  /**
+   * 写一个分组的布局，保留其他分组。原子写（.tmp → rename）避免进程中断留下半截 JSON。
+   * 坐标截断到 3 位小数（视觉无损，明显压体积）。超上限的分组拒绝写入并返回原因。
+   */
+  saveLayout(
+    project: string,
+    group: string,
+    entry: { mode?: string; pos: Record<string, number[]> },
+  ): { project: string; group: string; saved: number; skipped?: string } {
+    const entries = Object.entries(entry.pos || {});
+    if (entries.length > GraphService.MAX_LAYOUT_NODES) {
+      return {
+        project,
+        group,
+        saved: 0,
+        skipped: `节点数 ${entries.length} 超过上限 ${GraphService.MAX_LAYOUT_NODES}，未保存`,
+      };
+    }
+    const pos: Record<string, number[]> = {};
+    for (const [stableId, xyz] of entries) {
+      if (!Array.isArray(xyz) || xyz.length < 2) continue;
+      if (!xyz.every((v) => typeof v === "number" && Number.isFinite(v))) continue;
+      pos[stableId] = [
+        round3(xyz[0]),
+        round3(xyz[1]),
+        round3(xyz.length > 2 ? xyz[2] : 0),
+      ];
+    }
+    const all = this.readAllLayout(project);
+    all[group] = { at: new Date().toISOString(), mode: entry.mode, pos };
+    try {
+      const dir = path.join(this.data.getRoot(), "projects", project);
+      fs.mkdirSync(dir, { recursive: true });
+      const file = this.layoutPath(project);
+      const tmp = `${file}.tmp`;
+      fs.writeFileSync(tmp, JSON.stringify(all));
+      fs.renameSync(tmp, file);
+    } catch (err) {
+      return { project, group, saved: 0, skipped: `写入失败：${(err as Error).message}` };
+    }
+    return { project, group, saved: Object.keys(pos).length };
+  }
+
   private assertProject(project: string): void {
     if (!/^[\w.-]+$/.test(project)) {
       throw new Error(`project 参数非法（只允许字母数字、点、横线、下划线）：${project}`);
@@ -617,6 +705,18 @@ export class GraphService {
 
 function viewPath(dataRoot: string, project: string, viewId: string): string {
   return path.join(dataRoot, "projects", project, `${viewId}.json`);
+}
+
+/** 一组力导布局：时间戳、2D/3D 模式、坐标（stableId → [x,y,z]）。 */
+export interface LayoutEntry {
+  at?: string;
+  mode?: string;
+  pos?: Record<string, number[]>;
+}
+
+/** 坐标截断到 3 位小数（视觉无损，压体积）。 */
+function round3(v: number): number {
+  return Math.round(v * 1000) / 1000;
 }
 
 /** 合并两幅图：按节点 id、边 key（from->to->label）去重求并集，rows 取最新的。 */
