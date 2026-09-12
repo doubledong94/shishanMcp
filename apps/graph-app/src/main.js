@@ -523,7 +523,11 @@ const EDGE_CAP = 20000; // 预分配容量（对齐旧 FlowLine::edgeCapacity）
 const EDGE_HALF_WIDTH = 0.7; // 每侧半宽；总宽 ≈ 2*half（比原值减半）
 // 缺口顶角 60°：由"半底宽 / 高 = tan(30°)"得 高 = 半底宽 / tan(30°)。使缺口世界高度恒定 → 各边顶角一致。
 const EDGE_NOTCH_WORLD_H = EDGE_HALF_WIDTH / Math.tan(Math.PI / 6);
-const EDGE_INSET = 0.9; // 边端点按节点半径内缩的比例(≈圆盘边缘，避免伸进中心 z-fighting)
+// 边端点按节点半径内缩的比例：1.0 = 恰好停在节点盘边界。
+// 必须 ≥1.0——小于 1 会让边带钻进节点盘里，而节点盘是半透明的(alpha 0.3)，盘内的边看得见，
+// 视觉上就是"边渲染入侵到节点内部"。取 1.0 则边正好接到节点圆边上：既不侵入，
+// 中间又由节点本身充当连接点，线看起来是穿过节点连起来的。
+const EDGE_INSET = 1.0;
 
 const EDGE_VERT = `
 attribute vec3 edgePos;
@@ -558,9 +562,18 @@ varying float vAlpha;
 varying float vNotch;
 void main() {
   vec3 color = vColor;
-  // 流光：vFlow > -1.5 时画一段移动暗带（对齐旧 FlowLine）
+  // 流光：vFlow > -1.5 时画一段移动暗带。
+  // 相位 v 从 0 扫到 1 后回绕到 0，若直接按 vFlow 判亮带位置，回绕瞬间亮带会从边终点
+  // 瞬移回起点——即肉眼看到的突动。这里改为按"沿边的环绕距离"加热：把边两端的 uv.y(-1)
+  // 与 (+1) 视为同一点，亮带扫出终点的同时，其环绕镜像正从起点扫入，回绕前后完全连续，
+  // 且强度恒定（不是靠淡出掩盖）。
   if (vFlow > -1.5) {
-    float f = 0.8 * smoothstep(0.2, 0.0, abs(vFlow));
+    // 由 vFlow = v - (vUv.y+1)/2 反解出本帧相位 v。
+    float phase = vFlow + (vUv.y + 1.0) * 0.5;
+    float s = fract(phase) * 2.0 - 1.0;      // 亮带中心在边上的位置
+    float d = abs(vUv.y - s);
+    d = min(d, 2.0 - d);                      // 环绕：-1 与 +1 相连
+    float f = 0.8 * smoothstep(0.2, 0.0, d);
     color -= vec3(f);
   }
   float a = vAlpha;
