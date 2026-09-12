@@ -1174,12 +1174,16 @@ zoomEl.addEventListener("pointerup", () => { zoomDragging = false; });
 zoomEl.addEventListener("pointercancel", () => { zoomDragging = false; });
 
 // ---------- 力导剧烈程度（布局温度）拖拽条 ----------
-// 映射 0-100 -> 力导温度乘子，默认 50 = ×1.0（对应原 LAYOUT.temperature）
+// 映射 0-100 -> 力导温度乘子，全区间 0.1x ~ 100x，默认 50 = ×1.0（对应原 LAYOUT.temperature）。
+// 两端各用一段指数（左半 10 倍、右半 100 倍），而非整段单一指数：0.1 与 100 的几何中点是
+// √(0.1×100)=3.16，若整段单指数则默认 50 会变成 3.16x，把开箱即用的布局速度改快——故分两段，
+// 使 50 仍精确等于 1x（保持原有默认手感），同时端点恰为 0.1 / 100。
 let intensityMul = 1;
 const intensityEl = document.getElementById("intensity");
 function applyIntensity() {
   const v = (+intensityEl.value || 50) / 100;
-  intensityMul = 0.05 * Math.pow(400, v); // v=0→0.05x, v=0.5→1x, v=1→20x；默认 50=1x
+  // v<=0.5: 0.1→1（0.1×10^(2v)）；v>0.5: 1→100（100^(2v-1)）。两段在 v=0.5 处都等于 1，连续。
+  intensityMul = v <= 0.5 ? 0.1 * Math.pow(10, 2 * v) : Math.pow(100, 2 * v - 1);
 }
 intensityEl.addEventListener("input", applyIntensity);
 applyIntensity();
