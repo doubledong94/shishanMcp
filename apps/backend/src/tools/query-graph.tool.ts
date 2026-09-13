@@ -44,10 +44,10 @@ const PRESETS: Record<string, { description: string; needsParam: boolean; cypher
       "MATCH p=(c:Class {projectId:$project, name:$name})-[:EXTENDS]->(sup:Class) RETURN p",
   },
   polymorphism: {
-    description: "多态：某方法实际派发到哪些实现（需 param=方法名）",
+    description: "多态：某方法实际派发到哪些实现（需 param=方法名；同名多时用 file 收窄）",
     needsParam: true,
     cypher:
-      "MATCH p=(declared:Method {projectId:$project, name:$name})<-[:OVERRIDES*]-(impl:Method) RETURN p",
+      "MATCH p=(declared:Method {projectId:$project, name:$name})<-[:OVERRIDES*]-(impl:Method) WHERE declared.file CONTAINS $file RETURN p",
   },
   ancestors: {
     description: "类范围 super(C)：某类的所有祖先类（需 param=类名）",
@@ -75,22 +75,25 @@ const PRESETS: Record<string, { description: string; needsParam: boolean; cypher
       "MATCH (v1:Value {projectId:$project, name:$name})-[:FLOWS]->(cp:Value {projectId:$project,kind:'CALLED_PARAM'})-[:ARG_OF]->(cm:CalledMethod)-[:CALLS]->(m:Method) MATCH (v2:Value {projectId:$project})-[:REF]->(cm) RETURN v1, cp, cm, m, v2",
   },
   codeorder: {
-    description: "时机（时序主轴）：某方法体内的执行先后（需 param=方法名，从该方法沿 NEXT 走到函数尾）",
+    description:
+      "时机（时序主轴）：某方法体内的执行先后（需 param=方法名，从该方法沿 NEXT 走到函数尾）。" +
+      "同名方法多时会一起锚定（okhttp 有 18 个 intercept），用 file 收窄到某一个",
     needsParam: true,
     cypher:
-      "MATCH (m:Method {projectId:$project, name:$name}) MATCH p=(m)-[:NEXT*]->(x {projectId:$project}) UNWIND relationships(p) AS r WITH DISTINCT r MATCH (a)-[r]->(b) RETURN a, r, b",
+      "MATCH (m:Method {projectId:$project, name:$name}) WHERE m.file CONTAINS $file MATCH p=(m)-[:NEXT*]->(x {projectId:$project}) UNWIND relationships(p) AS r WITH DISTINCT r MATCH (a)-[r]->(b) RETURN a, r, b",
   },
   order_true: {
-    description: "某表达式为 true 时的时序（需 param=表达式名，经 CONTROLS 找条件、走 then 的 NEXT 链）",
+    description:
+      "某表达式为 true 时的时序（需 param=表达式名，经 CONTROLS 找条件、走 then 的 NEXT 链）",
     needsParam: true,
     cypher:
-      "MATCH (e:Value {projectId:$project, name:$name})-[:CONTROLS]->(c:Condition) MATCH p=(c)-[:NEXT*]->(x {projectId:$project}) UNWIND relationships(p) AS r WITH DISTINCT r MATCH (a)-[r]->(b) RETURN a, r, b",
+      "MATCH (e:Value {projectId:$project, name:$name}) WHERE e.file CONTAINS $file MATCH (e)-[:CONTROLS]->(c:Condition) MATCH p=(c)-[:NEXT*]->(x {projectId:$project}) UNWIND relationships(p) AS r WITH DISTINCT r MATCH (a)-[r]->(b) RETURN a, r, b",
   },
   order_false: {
     description: "某表达式为 false 时的时序（需 param=表达式名，走条件 else 分支的链）",
     needsParam: true,
     cypher:
-      "MATCH (e:Value {projectId:$project, name:$name})-[:CONTROLS]->(c:Condition) MATCH p=(c)-[:NEXT {branch:'false'}]->(x {projectId:$project}) UNWIND relationships(p) AS r WITH DISTINCT r MATCH (a)-[r]->(b) RETURN a, r, b",
+      "MATCH (e:Value {projectId:$project, name:$name}) WHERE e.file CONTAINS $file MATCH (e)-[:CONTROLS]->(c:Condition) MATCH p=(c)-[:NEXT {branch:'false'}]->(x {projectId:$project}) UNWIND relationships(p) AS r WITH DISTINCT r MATCH (a)-[r]->(b) RETURN a, r, b",
   },
 };
 
@@ -122,10 +125,17 @@ export const QueryGraphToolSpec: ToolSpec = {
         "preset 模板的锚定输入（对应 cypher 里的 $name）：按 preset 填方法名/类名/包名前缀/值名。" +
           "每个 preset 都需要它——没有锚定的查询会在全库变长展开而挂住。",
       ),
+    file: z
+      .string()
+      .optional()
+      .describe(
+        "可选的第二个锚定条件（对应 cypher 里的 $file，子串匹配）：同名方法/值很多时用它收窄到某一个，" +
+          "如 file='CallServerInterceptor'。不传则不过滤。codeorder / polymorphism / order_* 支持",
+      ),
     cypher: z
       .string()
       .optional()
-      .describe("合法的 cypher 查询语句，可含 $project / $name 参数。preset 未给时使用"),
+      .describe("合法的 cypher 查询语句，可含 $project / $name / $file 参数。preset 未给时使用"),
     name: z
       .string()
       .optional()
@@ -148,9 +158,18 @@ export class QueryGraphTool {
     description: QueryGraphToolSpec.description,
     parameters: QueryGraphToolSpec.parameters,
   })
-  async run(input: { project: string; preset?: string; param?: string; cypher?: string; name?: string }) {
+  async run(input: {
+    project: string;
+    preset?: string;
+    param?: string;
+    file?: string;
+    cypher?: string;
+    name?: string;
+  }) {
     return this.calls.track("query_graph", "mcp", input, () => {
-      const params: Record<string, unknown> = { project: input.project };
+      // $file 恒注入空串而不是不传：Neo4j 对缺参报错（"Expected parameter(s)"），
+      // 而 `x.file CONTAINS ''` 恒真、正好等价于"不过滤"，这样模板不必写 OR 分支。
+      const params: Record<string, unknown> = { project: input.project, file: input.file ?? "" };
       if (input.param != null) params.name = input.param;
       if (input.preset && PRESETS[input.preset]) {
         const tpl = PRESETS[input.preset];
