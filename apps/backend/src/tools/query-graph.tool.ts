@@ -81,7 +81,14 @@ const PRESETS: Record<string, { description: string; needsParam: boolean; cypher
       "同名方法多时会一起锚定（okhttp 有 18 个 intercept），用 file 收窄到某一个",
     needsParam: true,
     cypher:
-      "MATCH (m:Method {projectId:$project, name:$name}) WHERE m.file CONTAINS $file MATCH (m)-[:NEXT*]->(v {projectId:$project}) WITH m, collect(DISTINCT v) + m AS body UNWIND body AS a MATCH (a)-[r:NEXT|FLOWS]->(b) WHERE b IN body AND NOT (r:NEXT AND (a)-[:FLOWS]->(b)) RETURN a, r, b",
+      "MATCH (m:Method {projectId:$project, name:$name}) WHERE m.file CONTAINS $file " +
+      "MATCH (m)-[:NEXT*]->(v {projectId:$project}) WITH m, collect(DISTINCT v) + m AS body " +
+      "OPTIONAL MATCH (o:Value {projectId:$project, kind:'OPERATOR'})-[:FLOWS*1..8]-(y) " +
+      "WHERE o.file CONTAINS $file AND y IN body " +
+      "WITH m, body, collect(DISTINCT o) AS ops " +
+      "WITH m, body + [x IN ops WHERE x IS NOT NULL] AS full " +
+      "UNWIND full AS a MATCH (a)-[r:NEXT|FLOWS]->(b) " +
+      "WHERE b IN full AND NOT (r:NEXT AND (a)-[:FLOWS]->(b)) RETURN a, r, b",
   },
   order_true: {
     description:
@@ -89,7 +96,15 @@ const PRESETS: Record<string, { description: string; needsParam: boolean; cypher
       "同一对节点若既有 FLOWS 又有 NEXT，只画 FLOWS",
     needsParam: true,
     cypher:
-      "MATCH (e:Value {projectId:$project, name:$name}) WHERE e.file CONTAINS $file MATCH (e)-[:CONTROLS]->(c:Condition) MATCH (c)-[:NEXT*]->(v {projectId:$project}) WITH c, collect(DISTINCT v) + c AS body UNWIND body AS a MATCH (a)-[r:NEXT|FLOWS]->(b) WHERE b IN body AND NOT (r:NEXT AND (a)-[:FLOWS]->(b)) RETURN a, r, b",
+      "MATCH (e:Value {projectId:$project, name:$name}) WHERE e.file CONTAINS $file " +
+      "MATCH (e)-[:CONTROLS]->(c:Condition) MATCH (c)-[:NEXT*]->(v {projectId:$project}) " +
+      "WITH c, collect(DISTINCT v) + c AS body " +
+      "OPTIONAL MATCH (o:Value {projectId:$project, kind:'OPERATOR'})-[:FLOWS*1..8]-(y) " +
+      "WHERE o.file CONTAINS $file AND y IN body " +
+      "WITH c, body, collect(DISTINCT o) AS ops " +
+      "WITH c, body + [x IN ops WHERE x IS NOT NULL] AS full " +
+      "UNWIND full AS a MATCH (a)-[r:NEXT|FLOWS]->(b) " +
+      "WHERE b IN full AND NOT (r:NEXT AND (a)-[:FLOWS]->(b)) RETURN a, r, b",
   },
   order_false: {
     description:
@@ -97,7 +112,15 @@ const PRESETS: Record<string, { description: string; needsParam: boolean; cypher
       "同一对节点若既有 FLOWS 又有 NEXT，只画 FLOWS",
     needsParam: true,
     cypher:
-      "MATCH (e:Value {projectId:$project, name:$name}) WHERE e.file CONTAINS $file MATCH (e)-[:CONTROLS]->(c:Condition) MATCH (c)-[:NEXT {branch:'false'}]->(v {projectId:$project}) WITH c, collect(DISTINCT v) + c AS body UNWIND body AS a MATCH (a)-[r:NEXT|FLOWS]->(b) WHERE b IN body AND NOT (r:NEXT AND (a)-[:FLOWS]->(b)) RETURN a, r, b",
+      "MATCH (e:Value {projectId:$project, name:$name}) WHERE e.file CONTAINS $file " +
+      "MATCH (e)-[:CONTROLS]->(c:Condition) MATCH (c)-[:NEXT {branch:'false'}]->(v {projectId:$project}) " +
+      "WITH c, collect(DISTINCT v) + c AS body " +
+      "OPTIONAL MATCH (o:Value {projectId:$project, kind:'OPERATOR'})-[:FLOWS*1..8]-(y) " +
+      "WHERE o.file CONTAINS $file AND y IN body " +
+      "WITH c, body, collect(DISTINCT o) AS ops " +
+      "WITH c, body + [x IN ops WHERE x IS NOT NULL] AS full " +
+      "UNWIND full AS a MATCH (a)-[r:NEXT|FLOWS]->(b) " +
+      "WHERE b IN full AND NOT (r:NEXT AND (a)-[:FLOWS]->(b)) RETURN a, r, b",
   },
 };
 
