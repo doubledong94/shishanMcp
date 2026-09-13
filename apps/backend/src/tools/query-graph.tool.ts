@@ -76,24 +76,28 @@ const PRESETS: Record<string, { description: string; needsParam: boolean; cypher
   },
   codeorder: {
     description:
-      "时机（时序主轴）：某方法体内的执行先后（需 param=方法名，从该方法沿 NEXT 走到函数尾）。" +
+      "时机（时序主轴）+ 数据流：某方法体内的执行先后与值流向（需 param=方法名，从该方法沿 NEXT 走到函数尾）。" +
+      "同一对节点若既有 FLOWS 又有 NEXT，只画 FLOWS（数据依赖比时序相邻更有信息量，也避免两条边重叠）。" +
       "同名方法多时会一起锚定（okhttp 有 18 个 intercept），用 file 收窄到某一个",
     needsParam: true,
     cypher:
-      "MATCH (m:Method {projectId:$project, name:$name}) WHERE m.file CONTAINS $file MATCH p=(m)-[:NEXT*]->(x {projectId:$project}) UNWIND relationships(p) AS r WITH DISTINCT r MATCH (a)-[r]->(b) RETURN a, r, b",
+      "MATCH (m:Method {projectId:$project, name:$name}) WHERE m.file CONTAINS $file MATCH (m)-[:NEXT*]->(v {projectId:$project}) WITH m, collect(DISTINCT v) AS body UNWIND body AS a MATCH (a)-[r:NEXT|FLOWS]->(b) WHERE b IN body AND NOT (r:NEXT AND (a)-[:FLOWS]->(b)) RETURN a, r, b",
   },
   order_true: {
     description:
-      "某表达式为 true 时的时序（需 param=表达式名，经 CONTROLS 找条件、走 then 的 NEXT 链）",
+      "某表达式为 true 时的时序 + 数据流（需 param=表达式名，经 CONTROLS 找条件、走 then 的 NEXT 链）。" +
+      "同一对节点若既有 FLOWS 又有 NEXT，只画 FLOWS",
     needsParam: true,
     cypher:
-      "MATCH (e:Value {projectId:$project, name:$name}) WHERE e.file CONTAINS $file MATCH (e)-[:CONTROLS]->(c:Condition) MATCH p=(c)-[:NEXT*]->(x {projectId:$project}) UNWIND relationships(p) AS r WITH DISTINCT r MATCH (a)-[r]->(b) RETURN a, r, b",
+      "MATCH (e:Value {projectId:$project, name:$name}) WHERE e.file CONTAINS $file MATCH (e)-[:CONTROLS]->(c:Condition) MATCH (c)-[:NEXT*]->(v {projectId:$project}) WITH collect(DISTINCT v) AS body UNWIND body AS a MATCH (a)-[r:NEXT|FLOWS]->(b) WHERE b IN body AND NOT (r:NEXT AND (a)-[:FLOWS]->(b)) RETURN a, r, b",
   },
   order_false: {
-    description: "某表达式为 false 时的时序（需 param=表达式名，走条件 else 分支的链）",
+    description:
+      "某表达式为 false 时的时序 + 数据流（需 param=表达式名，走条件 else 分支的链）。" +
+      "同一对节点若既有 FLOWS 又有 NEXT，只画 FLOWS",
     needsParam: true,
     cypher:
-      "MATCH (e:Value {projectId:$project, name:$name}) WHERE e.file CONTAINS $file MATCH (e)-[:CONTROLS]->(c:Condition) MATCH p=(c)-[:NEXT {branch:'false'}]->(x {projectId:$project}) UNWIND relationships(p) AS r WITH DISTINCT r MATCH (a)-[r]->(b) RETURN a, r, b",
+      "MATCH (e:Value {projectId:$project, name:$name}) WHERE e.file CONTAINS $file MATCH (e)-[:CONTROLS]->(c:Condition) MATCH (c)-[:NEXT {branch:'false'}]->(v {projectId:$project}) WITH collect(DISTINCT v) AS body UNWIND body AS a MATCH (a)-[r:NEXT|FLOWS]->(b) WHERE b IN body AND NOT (r:NEXT AND (a)-[:FLOWS]->(b)) RETURN a, r, b",
   },
 };
 
