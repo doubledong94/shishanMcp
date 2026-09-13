@@ -9,76 +9,88 @@ import { mountedProjectList, mountedProjectsHint } from "./mounted-projects";
 
 /**
  * 预置 cypher 模板（图模型见 doc/GRAPH_MODEL.md，搜索语义见 doc/SEARCH_GUIDE.md）。
- * $project 由后端注入；需要额外输入（类名/包名）的模板用 $name（来自 param 参数）。
+ * $project 由后端注入；锚定用的输入统一走 $name（来自 param 参数）。
+ *
+ * <p><b>三条硬规则</b>（理由见 GRAPH_MODEL.md「NEXT 流搜索的三条规则」）：
+ * <ol>
+ *   <li><b>每个模板都必须锚定</b>（needsParam=true，用 $name 收窄到具体节点/方法/类/包）。
+ *       不锚定 = 全库扫全部起点做变长展开，实测 `count(p)` 跑 6 分 52 秒未完；LIMIT 拦不住，
+ *       因为每行都要先算出来。
+ *   <li><b>不写 LIMIT</b>。目的是把结果画到图上；LIMIT 会在懒拉取里静默截断路径，
+ *       少画的边不报错。有界性由锚定保证，不由 LIMIT 保证。
+ *   <li><b>NEXT 流不 `RETURN p`，改用去重边</b>（{@code UNWIND relationships(p) AS r WITH DISTINCT r}）。
+ *       含环的 NEXT 流里节点数不多、路径数却能爆炸：CallServerInterceptor.intercept 一个方法体
+ *       379 个节点 → 19238 条路径。`RETURN p` 实测 10s / 1.3GB，去重边 2s / 309KB，
+ *       而画到图上两者是同一套边。{@code count(p)} 更糟（要实体化全部路径）。
+ * </ol>
  */
 const PRESETS: Record<string, { description: string; needsParam: boolean; cypher: string }> = {
   nesting: {
-    description: "数据的分形：实例引用→调用点",
-    needsParam: false,
+    description: "数据的分形：某实例引用出发的 引用→调用点→被调方法（需 param=值名）",
+    needsParam: true,
     cypher:
-      "MATCH (v:Value {projectId:$project})-[:REF]->(cm:CalledMethod)-[:CALLS]->(m:Method) RETURN v, cm, m LIMIT 500",
+      "MATCH p=(v:Value {projectId:$project, name:$name})-[:REF]->(cm:CalledMethod)-[:CALLS]->(m:Method) RETURN p",
   },
   dataflow: {
-    description: "数据流：值→值（赋值/末写/传参/返回值）",
-    needsParam: false,
+    description: "数据流：某值出发的值→值链（需 param=值名）",
+    needsParam: true,
     cypher:
-      "MATCH (a:Value {projectId:$project})-[:FLOWS*1..6]->(b:Value) RETURN a, b LIMIT 500",
+      "MATCH p=(a:Value {projectId:$project, name:$name})-[:FLOWS*]->(b:Value {projectId:$project}) RETURN p",
   },
   types: {
-    description: "类继承关系（EXTENDS）",
-    needsParam: false,
+    description: "类继承关系：某类的直接父类（需 param=类名）",
+    needsParam: true,
     cypher:
-      "MATCH (c:Class {projectId:$project})-[:EXTENDS]->(sup:Class) RETURN c, sup LIMIT 500",
+      "MATCH p=(c:Class {projectId:$project, name:$name})-[:EXTENDS]->(sup:Class) RETURN p",
   },
   polymorphism: {
-    description: "多态：调用抽象方法实际派发到哪些实现（OVERRIDES）",
-    needsParam: false,
+    description: "多态：某方法实际派发到哪些实现（需 param=方法名）",
+    needsParam: true,
     cypher:
-      "MATCH (cm:CalledMethod {projectId:$project})-[:CALLS]->(declared:Method) MATCH (declared)<-[:OVERRIDES*1..4]-(impl:Method) RETURN cm, declared, impl LIMIT 500",
+      "MATCH p=(declared:Method {projectId:$project, name:$name})<-[:OVERRIDES*]-(impl:Method) RETURN p",
   },
   ancestors: {
     description: "类范围 super(C)：某类的所有祖先类（需 param=类名）",
     needsParam: true,
     cypher:
-      "MATCH (c:Class {projectId:$project, name:$name})-[:EXTENDS*1..4]->(a:Class) RETURN c, a LIMIT 500",
+      "MATCH p=(c:Class {projectId:$project, name:$name})-[:EXTENDS*]->(a:Class) RETURN p",
   },
   descendants: {
     description: "类范围 sub(C)：某类的所有子孙类（需 param=类名）",
     needsParam: true,
     cypher:
-      "MATCH (c:Class {projectId:$project, name:$name})<-[:EXTENDS*1..4]-(d:Class) RETURN c, d LIMIT 500",
+      "MATCH p=(c:Class {projectId:$project, name:$name})<-[:EXTENDS*]-(d:Class) RETURN p",
   },
   inPackage: {
     description: "类范围 inPackage(P)：某包下的所有类（需 param=包名前缀）",
     needsParam: true,
     cypher:
-      "MATCH (c:Class {projectId:$project}) WHERE c.package STARTS WITH $name RETURN c LIMIT 500",
+      "MATCH (c:Class {projectId:$project}) WHERE c.package STARTS WITH $name RETURN c",
   },
   intersection: {
-    description: "相交：数据流(值→实参) ∩ 数据的分形(实例→调用) 汇聚于同一调用点",
-    needsParam: false,
+    description:
+      "相交：数据流(值→实参) ∩ 数据的分形(实例→调用) 汇聚于同一调用点（需 param=值名，锚定数据流起点）",
+    needsParam: true,
     cypher:
-      "MATCH (v1:Value {projectId:$project})-[:FLOWS]->(cp:Value {projectId:$project,kind:'CALLED_PARAM'})-[:ARG_OF]->(cm:CalledMethod)-[:CALLS]->(m:Method) MATCH (v2:Value {projectId:$project})-[:REF]->(cm) RETURN v1, cp, cm, m, v2 LIMIT 500",
+      "MATCH (v1:Value {projectId:$project, name:$name})-[:FLOWS]->(cp:Value {projectId:$project,kind:'CALLED_PARAM'})-[:ARG_OF]->(cm:CalledMethod)-[:CALLS]->(m:Method) MATCH (v2:Value {projectId:$project})-[:REF]->(cm) RETURN v1, cp, cm, m, v2",
   },
   codeorder: {
-    description:
-      "时机（时序主轴）：某方法体内的执行先后（param=方法名，从该方法沿 NEXT 走到函数尾）。" +
-      "必须给 param——不锚定起点会在全库做无界 NEXT 展开，NEXT 含循环回边，查询会挂住",
+    description: "时机（时序主轴）：某方法体内的执行先后（需 param=方法名，从该方法沿 NEXT 走到函数尾）",
     needsParam: true,
     cypher:
-      "MATCH (m:Method {projectId:$project, name:$name}) MATCH p=(m)-[:NEXT*]->(x {projectId:$project}) RETURN p LIMIT 500",
+      "MATCH (m:Method {projectId:$project, name:$name}) MATCH p=(m)-[:NEXT*]->(x {projectId:$project}) UNWIND relationships(p) AS r WITH DISTINCT r MATCH (a)-[r]->(b) RETURN a, r, b",
   },
   order_true: {
-    description: "某表达式为 true 时的时序（param=表达式名，经 CONTROLS 找条件、走 then 的 NEXT 链）",
+    description: "某表达式为 true 时的时序（需 param=表达式名，经 CONTROLS 找条件、走 then 的 NEXT 链）",
     needsParam: true,
     cypher:
-      "MATCH (e:Value {projectId:$project, name:$name})-[:CONTROLS]->(c:Condition) MATCH p=(c)-[:NEXT*]->(x {projectId:$project}) RETURN p LIMIT 50",
+      "MATCH (e:Value {projectId:$project, name:$name})-[:CONTROLS]->(c:Condition) MATCH p=(c)-[:NEXT*]->(x {projectId:$project}) UNWIND relationships(p) AS r WITH DISTINCT r MATCH (a)-[r]->(b) RETURN a, r, b",
   },
   order_false: {
-    description: "某表达式为 false 时的时序（param=表达式名，走条件 else 分支的链）",
+    description: "某表达式为 false 时的时序（需 param=表达式名，走条件 else 分支的链）",
     needsParam: true,
     cypher:
-      "MATCH (e:Value {projectId:$project, name:$name})-[:CONTROLS]->(c:Condition) MATCH p=(c)-[:NEXT {branch:'false'}]->(x {projectId:$project}) RETURN p LIMIT 50",
+      "MATCH (e:Value {projectId:$project, name:$name})-[:CONTROLS]->(c:Condition) MATCH p=(c)-[:NEXT {branch:'false'}]->(x {projectId:$project}) UNWIND relationships(p) AS r WITH DISTINCT r MATCH (a)-[r]->(b) RETURN a, r, b",
   },
 };
 
@@ -89,7 +101,8 @@ export const QueryGraphToolSpec: ToolSpec = {
   description:
     "对 Neo4j 图数据库执行一条 cypher 查询（通常返回路径/图），把结果中的节点与边存成快照，" +
     "并返回一个可打开的三维图页面 URL（GRAPH_VIEW_URL）。" +
-    "可传 preset 用预置模板（部分需 param 提供类名/包名），或用 cypher 自定义。" +
+    "可传 preset 用预置模板（**每个 preset 都必须给 param 锚定到具体节点**），或用 cypher 自定义。" +
+    "自定义 cypher 时务必自己锚定起点：不锚定会在全库做变长展开，实测会挂住（详见 preset 描述）。" +
     "预置模板：" + Object.entries(PRESETS).map(([k, v]) => `${k}(${v.description})`).join("；") +
     "。" + "当前已挂载项目：" + mountedProjectList(),
   parameters: z.object({
@@ -105,7 +118,10 @@ export const QueryGraphToolSpec: ToolSpec = {
     param: z
       .string()
       .optional()
-      .describe("preset 模板需要的额外输入（对应 cypher 里的 $name，如类名/包名）"),
+      .describe(
+        "preset 模板的锚定输入（对应 cypher 里的 $name）：按 preset 填方法名/类名/包名前缀/值名。" +
+          "每个 preset 都需要它——没有锚定的查询会在全库变长展开而挂住。",
+      ),
     cypher: z
       .string()
       .optional()
