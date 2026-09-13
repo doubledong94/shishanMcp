@@ -276,6 +276,10 @@ RETURN m, cm, m2
 > 14779 个起点 × 各自的可达路径，实测 `count(p)` 跑 **6 分 52 秒未完**。
 > 只给 `name` 会同时锚定所有同名方法（okhttp 有 18 个 `intercept`），按规则③返回去重边时
 > 18 个起点合起来 5s / 2032 行，可接受；`RETURN p` 则不然。
+> 要唯一定位一个函数就补 `file` 子串——`query_graph` 的 `codeorder` / `polymorphism` /
+> `order_*` preset 支持可选的 `file` 输入（恒注入空串，`CONTAINS ''` 恒真即不过滤）：
+> `preset=codeorder, param=intercept, file=CallServerInterceptor` → 380 节点 / 392 边，
+> 全部落在该文件内；不传 `file` 则 18 个 `intercept` 一起锚定（2027 条边）。
 >
 > **③ 别 `count(p)`，也别 `RETURN p` 枚举路径——返回去重边集。**
 >
