@@ -1347,7 +1347,9 @@ applyIntensity();
 const LAYOUT_SAVE_MS = 10000;  // 定时保存间隔
 const LAYOUT_GROUP_CURRENT = "__current__"; // "当前工作图"分组（与后端约定一致）
 
-let layoutGroup = LAYOUT_GROUP_CURRENT; // 当前渲染的图所属分组：__current__ 或某历史视图 id
+// 布局分组恒为"当前工作图"：选视图是一次性加载（后端把视图写进当前工作图），页面不保留
+// "在看某个视图"的模式，所以坐标永远属于同一个分组。
+let layoutGroup = LAYOUT_GROUP_CURRENT;
 let _layoutSavedSig = "";               // 上次已上报的坐标签名（判断"有无变动"）
 let _restoredPos = null;                // 本次加载预取到的 { stableId: [x,y,z] }，供 renderGraph 套用
 let _layoutPrefetchPending = false;     // 布局预取进行中：轮询等它就绪再渲染，避免随机撒点抢先
@@ -2717,7 +2719,7 @@ async function loadViews() {
   } catch {
     return; // 瞬时失败交给后台轮询下次再取，不必打断交互
   }
-  viewSel.innerHTML = '<option value="">— 实时跟随当前工作图 —</option>';
+  viewSel.innerHTML = '<option value="">— 加载某个已保存视图… —</option>';
   for (const v of data.views || []) {
     const opt = document.createElement("option");
     opt.value = v.id;
@@ -2730,13 +2732,13 @@ async function loadViews() {
 }
 
 /** [live] 固定页实时跟随当前工作图：agent 调 query_graph → 增量并入；new_graph → 保存并清空。
- * 仅当下拉框为空（实时跟随）时跟随；选中某个已保存视图（pin）时暂停，避免被拽走。 */
+ * **没有 pin 状态**——永远跟随。下拉框选已保存视图只是"一次性加载"动作：后端把该视图
+ * 写进当前工作图（restoreViewAsCurrent），之后页面照常跟随新的 query_graph。 */
 let lastGraphSig = "";
 let lastLocateId = null; // 已处理过的待定位稳定 id，避免重复聚焦
 async function pollCurrent() {
   const project = projectSel.value;
   if (!project) return;
-  if (viewSel.value !== "") return; // 用户 pinned 了某个历史视图，不跟随
   // 首帧防竞态：load() 的布局预取是异步的，若本轮轮询先于它完成就撒点渲染，节点会被随机
   // 定位并占住 nodePos（renderGraph 对已有位置直接跳过），预取到的布局反而失效。等预取就绪。
   if (_restoredPos === null && _layoutPrefetchPending) return;
@@ -2780,6 +2782,16 @@ async function pollCurrent() {
 setInterval(pollCurrent, 2000);
 
 async function load() {
+  // 选视图是**一次性动作**，不是一种模式：无论成功、失败还是空视图，结束时都复位下拉框
+  // 回到"实时跟随"。否则它会一直显示那个视图名、看起来像锁定在此视图。
+  try {
+    await loadInner();
+  } finally {
+    viewSel.value = "";
+  }
+}
+
+async function loadInner() {
   errorEl.textContent = "";
   const project = projectSel.value;
   if (!project) {
@@ -2789,56 +2801,48 @@ async function load() {
   // 换图/换项目前，先把当前这张图的布局强制存到它自己的分组——否则分组一切换，
   // 本次的坐标就会被当成新图的布局上报，把新图已有的布局覆盖掉。
   saveLayoutIfChanged(true);
+  // 下拉框选中的视图只是"这次加载什么"：选了就先用后端把该视图写进当前工作图
+  // （restoreViewAsCurrent），再照常读当前工作图。**加载完即回到跟随态**——不保留
+  // "在看某个视图"的模式，之后的 query_graph 照常并入。布局分组也随之始终是当前工作图。
   let viewId = viewSel.value;
   if (viewId === "__current__") viewId = ""; // 兼容直达当前工作图的 URL
-  // 布局分组随图切换；并预取该分组的布局，供 renderGraph 撒点时套用。
-  layoutGroup = viewId || LAYOUT_GROUP_CURRENT;
+  if (viewId) {
+    const restoreRes = await fetch(`/api/graph/restore`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ project, viewId }),
+    });
+    if (!restoreRes.ok) {
+      errorEl.textContent = `加载视图失败: ${restoreRes.status}`;
+      return;
+    }
+    await restoreRes.json();
+    toast("已用该视图替换当前工作图");
+  }
+  // 布局分组恒为当前工作图；并预取该分组的布局，供 renderGraph 撒点时套用。
+  layoutGroup = LAYOUT_GROUP_CURRENT;
   _layoutPrefetchPending = true;
   _restoredPos = await fetchLayoutPos(project, layoutGroup);
   _layoutPrefetchPending = false;
   _layoutSavedSig = ""; // 新图重新开始比较签名
-  if (!viewId) {
-    // 实时跟随：直接读当前累积工作图（query_graph 增量并入的）
-    const res = await fetch(`/api/graph/current?project=${encodeURIComponent(project)}`);
-    if (!res.ok) {
-      errorEl.textContent = `读取当前工作图失败: ${res.status}`;
-      return;
-    }
-    const cur = await res.json();
-    // 加载新内容 → 重置当前图
-    clearGraph();
-    if (cur.empty || !cur.nodes?.length) {
-      statsEl.textContent = "0 节点 · 0 边（工作图为空，先让 AI 调用 query_graph，或手动 POST /api/run/query_graph）";
-      return;
-    }
-    renderGraph(cur);
+  // 实时跟随：直接读当前累积工作图（query_graph 增量并入的）
+  const res = await fetch(`/api/graph/current?project=${encodeURIComponent(project)}`);
+  if (!res.ok) {
+    errorEl.textContent = `读取当前工作图失败: ${res.status}`;
     return;
   }
-  // 加载已保存视图 → 用该视图整图替换当前工作图（含其搜索历史），之后新查询在此图上继续叠加
-  const restoreRes = await fetch(`/api/graph/restore`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ project, viewId }),
-  });
-  if (!restoreRes.ok) {
-    errorEl.textContent = `加载视图失败: ${restoreRes.status}`;
-    return;
-  }
-  await restoreRes.json();
-  const curRes = await fetch(`/api/graph/current?project=${encodeURIComponent(project)}`);
-  if (!curRes.ok) {
-    errorEl.textContent = `读取替换后的当前工作图失败: ${curRes.status}`;
-    return;
-  }
-  const cur = await curRes.json();
+  const cur = await res.json();
+  // 加载新内容 → 重置当前图
   clearGraph();
+  lastGraphSig = `${cur.revision || 0}:${(cur.nodes || []).length}:${(cur.edges || []).length}`;
   if (cur.empty || !cur.nodes?.length) {
-    statsEl.textContent = "该视图为空";
+    statsEl.textContent = viewId
+      ? "该视图为空"
+      : "0 节点 · 0 边（工作图为空，先让 AI 调用 query_graph，或手动 POST /api/run/query_graph）";
     renderSearchHistory(cur.history);
     return;
   }
   renderGraph(cur);
-  toast("已用该视图替换当前工作图");
 }
 
 initHistoryToggle(); // 恢复搜索历史面板的收起/展开态
@@ -3495,6 +3499,10 @@ loadProjects().then(() => {
     viewSel.value = decodeURIComponent(m[2]);
     load();
     resetCodeTree();
+    // 加载完即清掉 hash：`viewUrl` 是 query_graph 给的"看这次结果"的直达链接，
+    // 语义是**一次性加载**该视图，不是把页面锁在它上面。留着 hash 会让下拉框
+    // 一直停在这个 viewId 上，看起来像"选定状态"。
+    history.replaceState(null, "", location.pathname + location.search);
   } else {
     // 无 hash：停留"实时跟随当前工作图"。这里也要预取布局——否则 pollCurrent 首次
     // renderGraph 时 _restoredPos 还是 null，节点会随机撒点、刷新后布局丢失。
