@@ -2847,7 +2847,16 @@ async function loadInner() {
 
 initHistoryToggle(); // 恢复搜索历史面板的收起/展开态
 initPanelToggle();   // 恢复右侧整体面板的收起/展开态
-initThree();
+// initThree 建 WebGL 上下文，在无 GPU/无 WebGL 的环境（无头浏览器、老显卡驱动）会抛异常。
+// 它后面还有 loadProjects() 等初始化，一旦抛出整条链就断了——页面只剩空下拉框、永远不跟随，
+// 且看不出"是 3D 挂了"。故兜住：渲染不了也让项目/视图/轮询照常工作。
+try {
+  initThree();
+} catch (err) {
+  console.error("[graph] WebGL 初始化失败，3D 渲染不可用：", err);
+  const el = document.getElementById("error");
+  if (el) el.textContent = "3D 渲染不可用（WebGL 初始化失败），但搜索与轮询仍正常";
+}
 restoreViewToggles(); // 刷新后恢复流色/维度着色模式；换图/同图都会按当前图重算应用
 document.getElementById("build").textContent = `build ${BUILD}`;
 
@@ -3497,12 +3506,13 @@ loadProjects().then(() => {
     codeProjectSel.value = decodeURIComponent(m[1]);
     loadViews();
     viewSel.value = decodeURIComponent(m[2]);
-    load();
+    // load() 完成后清掉 hash（load 是 async，故放 finally）：`viewUrl` 是 query_graph 给的
+    // "看这次结果"的直达链接，语义是**一次性加载**该视图，不是把页面锁在它上面。
+    // 留着 hash 的话，页面看起来还停在那个视图上（与"无 pin 状态"矛盾）。
+    load().finally(() => {
+      history.replaceState(null, "", location.pathname + location.search);
+    });
     resetCodeTree();
-    // 加载完即清掉 hash：`viewUrl` 是 query_graph 给的"看这次结果"的直达链接，
-    // 语义是**一次性加载**该视图，不是把页面锁在它上面。留着 hash 会让下拉框
-    // 一直停在这个 viewId 上，看起来像"选定状态"。
-    history.replaceState(null, "", location.pathname + location.search);
   } else {
     // 无 hash：停留"实时跟随当前工作图"。这里也要预取布局——否则 pollCurrent 首次
     // renderGraph 时 _restoredPos 还是 null，节点会随机撒点、刷新后布局丢失。
