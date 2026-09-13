@@ -61,22 +61,24 @@ const PRESETS: Record<string, { description: string; needsParam: boolean; cypher
       "MATCH (v1:Value {projectId:$project})-[:FLOWS]->(cp:Value {projectId:$project,kind:'CALLED_PARAM'})-[:ARG_OF]->(cm:CalledMethod)-[:CALLS]->(m:Method) MATCH (v2:Value {projectId:$project})-[:REF]->(cm) RETURN v1, cp, cm, m, v2 LIMIT 500",
   },
   codeorder: {
-    description: "时机（时序主轴）：块内语句的先后（NEXT 链）",
-    needsParam: false,
+    description:
+      "时机（时序主轴）：某方法体内的执行先后（param=方法名，从该方法沿 NEXT 走到函数尾）。" +
+      "必须给 param——不锚定起点会在全库做无界 NEXT 展开，NEXT 含循环回边，查询会挂住",
+    needsParam: true,
     cypher:
-      "MATCH p=(a {projectId:$project})-[:NEXT*1..8]->(b {projectId:$project}) RETURN p LIMIT 50",
+      "MATCH (m:Method {projectId:$project, name:$name}) MATCH p=(m)-[:NEXT*]->(x {projectId:$project}) RETURN p LIMIT 500",
   },
   order_true: {
     description: "某表达式为 true 时的时序（param=表达式名，经 CONTROLS 找条件、走 then 的 NEXT 链）",
     needsParam: true,
     cypher:
-      "MATCH (e:Value {projectId:$project, name:$name})-[:CONTROLS]->(c:Condition) MATCH p=(c)-[:NEXT*1..6]->(x {projectId:$project}) RETURN p LIMIT 50",
+      "MATCH (e:Value {projectId:$project, name:$name})-[:CONTROLS]->(c:Condition) MATCH p=(c)-[:NEXT*]->(x {projectId:$project}) RETURN p LIMIT 50",
   },
   order_false: {
     description: "某表达式为 false 时的时序（param=表达式名，走条件 else 分支的链）",
     needsParam: true,
     cypher:
-      "MATCH (e:Value {projectId:$project, name:$name})-[:CONTROLS]->(c:Condition) MATCH p=(c)-[:ELSE]->(y {projectId:$project})-[:NEXT*1..5]->(x {projectId:$project}) RETURN p LIMIT 50",
+      "MATCH (e:Value {projectId:$project, name:$name})-[:CONTROLS]->(c:Condition) MATCH p=(c)-[:NEXT {branch:'false'}]->(x {projectId:$project}) RETURN p LIMIT 50",
   },
 };
 
@@ -141,8 +143,14 @@ export class QueryGraphTool {
         }
         return this.graph.queryGraph(input.project, tpl.cypher, params, input.preset, input.name);
       }
-      const cypher = input.cypher || PRESETS.calls.cypher;
-      return this.graph.queryGraph(input.project, cypher, params, undefined, input.name);
+      // 既没给 preset 也没给 cypher：报错而不是回退到某个 preset——默认 preset 已随
+      // calls/callers 的删除而消失，旧代码这里引用 PRESETS.calls 会直接抛异常。
+      if (!input.cypher) {
+        return {
+          error: "需要 preset 或 cypher 之一（preset 见工具描述；自定义则传 cypher）",
+        };
+      }
+      return this.graph.queryGraph(input.project, input.cypher, params, undefined, input.name);
     });
   }
 }

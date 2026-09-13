@@ -30,7 +30,7 @@ curl -s -X POST http://localhost:18081/api/run/query_graph \
 定位一个高层函数后，把它的整个调用链（含分支/占用）在调用（时序轴的"分形"）维度展开——**不显示 Value（数据）节点**。
 
 ```cypher
-MATCH p=(m:Method)-[:ROOT|CALLS*1..60]->(x)
+MATCH p=(m:Method)-[:NEXT|CALLS*1..60]->(x)
 WHERE m.name='intercept'
   AND coalesce(m.file, m.filePath) CONTAINS 'CallServerInterceptor'
   AND NOT x:Value
@@ -38,10 +38,12 @@ RETURN p LIMIT 2000
 ```
 
 - 起点 `m`：`name` + 文件过滤，精确锚定某个类里的同名方法（okhttp 有多个 `Interceptor.intercept`）。
-- 变长 `[:ROOT|CALLS*1..60]`：ROOT（方法→根条件）→ NEXT（条件→块内运行时节点）→
-  CALLS（调用点→被调方法），三种边混着走、最多 60 跳，形成"从 intercept 向外扩散的调用闭包"。
+- 变长 `[:NEXT|CALLS*1..60]`：NEXT（Method→方法体首事件，及条件→块内运行时节点）→
+  CALLS（调用点→被调方法），两种边混着走、最多 60 跳，形成"从 intercept 向外扩散的调用闭包"。
 - `NOT x:Value`：路径终点不是数据节点，所以返回的只有 `Method / CalledMethod / Condition` 三类。
-- 实测（CallServerInterceptor.intercept）：`1 起点 + 30 Method + 36 CalledMethod + 25 Condition = 91 节点`。
+- 实测（CallServerInterceptor.intercept）：`1 起点 + 17 Method + 20 CalledMethod + 12 Condition = 50 节点`
+  （旧值 91 是 NEXT 链上还挂着 METHOD 根条件、且 Condition 经 NEXT 直接相连时的口径；删掉根条件假节点后
+  Condition 只剩真实分支节点，故变小）。
 
 ---
 
@@ -51,7 +53,7 @@ RETURN p LIMIT 2000
 中间夹的 Value/Condition 已存在、仅作连通，但相邻两函数之间**不再隔其它函数调用**。
 
 ```cypher
-MATCH p=(a:CalledMethod)-[:NEXT*1..10]->(b:CalledMethod)
+MATCH p=(a:CalledMethod)-[:NEXT*]->(b:CalledMethod)
 WHERE a.file CONTAINS 'CallServerInterceptor.kt' AND a.line<=130
   AND b.file CONTAINS 'CallServerInterceptor.kt' AND b.line<=130
   AND ALL(n IN nodes(p)[1..-1] WHERE NOT n:CalledMethod)
@@ -59,7 +61,8 @@ RETURN DISTINCT a.name+' @'+toString(a.line)+'  NEXT->  '+b.name+' @'+toString(b
 ORDER BY step
 ```
 
-- 路径长度限制 `*1..10`：**必须限**——全量（如 `*1..60`）在 47 个调用点两两展开是组合爆炸，会卡死/超时。
+- 起点 `(a:CalledMethod)` 由 `file` + `line<=130` 收窄到 47 个调用点，规模可控，故可用无界 `*`。
+  但**不要 `RETURN p`**——`count`/`DISTINCT` 类返回才稳（见 `GRAPH_MODEL.md`「NEXT 流搜索的三条规则」）。
 - `ALL(n IN nodes(p)[1..-1] WHERE NOT n:CalledMethod)`：抽象到"函数层"，`a→b` 之间只穿 Value/Condition，
   即 `a` 在时序链上的**下一个函数**就是 `b`。
 - 一个 `a` 有多个后继 = **分支**（if/else/循环各连各的），是正当的控制流，不是漏连。
@@ -76,12 +79,14 @@ ORDER BY step
 ```cypher
 MATCH (m:Method {projectId: $project, name:'intercept'})
 WHERE m.file CONTAINS 'CallServerInterceptor'
-MATCH q=(a)-[:NEXT*1..6]->(b)
-WHERE a.file=m.file AND b.file=m.file
-  AND a.line>=31 AND a.line<=135 AND b.line>=31 AND b.line<=135
+MATCH q=(m)-[:NEXT*]->(b)
+WHERE b.file=m.file AND b.line>=31 AND b.line<=135
 RETURN q LIMIT 400
 ```
 
+- **起点是 `Method` 节点**（`Method-[:NEXT]->方法体首事件`）。不能写成自由起点 `(a)-[:NEXT*]->(b)`
+  再靠 `WHERE a.file=…` 收窄——那样 Neo4j 会先扫全库节点做无界展开再过滤，实测会挂住
+  （见 `GRAPH_MODEL.md`「NEXT 流搜索的三条规则」）。
 - 只覆盖 `intercept` 函数体的行区间（31–135）；`CallServerInterceptor.kt` 之后的行属于其它方法（如
   `writeResponseBody`），不算 intercept 的一层调用。
 - 返回 path `q` 才会被 `extractGraphView` 解析出 **NEXT 边**（`graph.service.ts` 只在遇到 Path 时 `addEdge`）。

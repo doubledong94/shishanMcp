@@ -65,9 +65,9 @@ NEO4J_DATABASE  # 可选
 
 | 节点 | 关键属性 | 说明 |
 | --- | --- | --- |
-| `:CalledMethod` | `id, file, line, method` | 一处调用点；同时是 ARG_OF / RET_OF 的枢纽 |
-| `:Value`（运行时形态） | `id, kind, name, type, file, line, read, write` | kind ∈ FIELD / PARAM / RETURN / LOCAL_VAR / CALLED_PARAM / CALLED_RETURN / DEFAULT_VALUE / KEY_WORD_VALUE / ENUM_INSTANCE / ANONYMOUS_CLASS，对应旧 `GlobalInfo.h` 的 KEY_TYPE_* |
-| `:Condition` | `id, kind, method` | 分支节点，kind: IF / LOOP / FOR / WHILE / CATCH / TRY… |
+| `:CalledMethod` | `id, file, line, method` | 一处调用点；同时是 ARG_OF 的枢纽（RET_OF 未实现） |
+| `:Value`（运行时形态） | `id, kind, name, type, file, line, read, write` | kind 实测 9 种：CALLED_RETURN / CALLED_PARAM / LITERAL / FIELD / LOCAL_VAR / PARAM / RETURN / INDEX / THROW，对应旧 `GlobalInfo.h` 的 KEY_TYPE_*（`DEFAULT_VALUE`/`KEY_WORD_VALUE`/`ENUM_INSTANCE`/`ANONYMOUS_CLASS` 在枚举里但当前索引未产出） |
+| `:Condition` | `id, kind, file, line` | 分支节点，kind 实测仅 4 种：**IF / LOOP / TRY / FINALLY**（`FOR`/`WHILE` 归一到 `LOOP`；**无 CATCH 节点**——catch 体从 TRY 直接经 NEXT 扇出进入，该边带 `exception=<异常类型全名>` 属性区分；也**无 METHOD 根条件节点**） |
 
 ### 3.2 关系类型
 
@@ -77,26 +77,26 @@ NEO4J_DATABASE  # 可选
 | --- | --- | --- |
 | `(:Class)-[:DECLARES]->(:Method\|:Field)` | 类声明成员 | `method / constructor / field / parameter / return` |
 | `(:Method)-[:HAS_PARAM]->(:Value)` | 方法形参 | `parameter(M, P)` |
-| `(:Method)-[:RETURNS]->(:Value)` | 方法返回值 | `return(M, R)` |
-| `(:Class)-[:EXTENDS\|IMPLEMENTS]->(:Class)` | 继承/实现 | `subType(T, S)` |
+| `(:Method)-[:RETURNS]->(:Value)` | 方法返回值（**未实现**：常量在、边未建，实测 0 条） | `return(M, R)` |
+| `(:Class)-[:EXTENDS]->(:Class)` | 继承（`IMPLEMENTS` **未实现**，接口实现并入 `EXTENDS`） | `subType(T, S)` |
 | `(:Method)-[:OVERRIDES]->(:Method)` | 覆写 | `override(K, S)` |
 | ~~`(:Method)-[:USES]->(:Method\|:Field)`~~ | ~~方法使用了谁（类范围 usedBy 搜索用）~~ | ~~`methodUseMethod / methodUseField`~~（已决定不实现） |
-| `(:Value)-[:TYPED_BY]->(:Class)` | 成员类型（可选，支撑类型遍历） | `instanceOf(K, T)` |
+| `(:Value)-[:TYPED_BY]->(:Class)` | 成员类型（**未实现**：改用声明属性 `Field.type`/`Value.kind`） | `instanceOf(K, T)` |
 
 **运行时层关系：**
 
 | 关系 | 说明 | 旧 prolog |
 | --- | --- | --- |
-| `(:Method)-[:ROOT]->(:Condition)` | 方法根分支 | 方法 conditionItem |
+| `(:Method)-[:NEXT]->(方法体首事件)` | 方法入口：`Method` 即该方法时序链的首节点，直连其方法体第一个运行时事件（**无 ROOT 边、无 kind=METHOD 的根条件节点**） | 方法 conditionItem |
 | `(:Condition)-[:NEXT]->(嵌套条件首事件)` | 分支嵌套：嵌套 if/循环在分支内，经分支的 NEXT 链进入（无 SUB 边） | super→sub condition |
 | `(:Condition)-[:NEXT]->(else-if 守卫值)` | else-if 链：前个 if 的假路径经 NEXT 进入下个 else-if 的守卫值，不再物化 kind=ELSE 节点/ELSE 边 | Condition→Else→Condition |
 | `(:CalledMethod)-[:CALLS]->(:Method)` | 调用点解析到被调方法声明 | calledMethod→TimingStep→method |
 | `(:Value)-[:ARG_OF]->(:CalledMethod)` | 实参属于哪个调用点 | calledParamToCalledReturn 等 |
-| `(:Value)-[:RET_OF]->(:CalledMethod)` | 返回值使用属于哪个调用点 | 同上 |
+| `(:Value)-[:RET_OF]->(:CalledMethod)` | 返回值使用属于哪个调用点（**未实现**：常量在、边未建，实测 0 条） | 同上 |
 | `(:Value)-[:FLOWS]->(:Value)` | 数据流（赋值/读写/传参/返回值） | `flow(Mk, S, D)` |
 | `(:Value)-[:CONTROLS]->(:Condition)` | 条件变量守卫哪个分支 | `toConditionValue→conditionItem` |
 | `(:Value)-[:REF]->(:CalledMethod)` | 数据的分形：实例引用访问成员 | Reference |
-| `(:Value\|:CalledMethod\|:Condition)-[:NEXT]->(...)` | 时机（时序主轴）：事件级链，**只在单个方法体内**表达先后——块尾接到块外后续；**不建立跨函数的 NEXT**（不再有 `calledMethod→被调首事件`、`被调退出→calledReturn` 这类跨方法 NEXT），跨函数关联由 `CALLS`/`RET_OF`/`ARG_OF` 等逻辑边承载。**所有运行时 value 事件都入链**（函数体直排 value、实参列表/条件表达式内部读取、实参槽 CALLED_PARAM、嵌套调用 CALLED_RETURN、索引元素 INDEX、返回 RETURN），保证 method↔value、value↔value 时序连续、节点不孤立；实参槽在调用点按执行序入链（`...→实参求值→实参槽→调用→返回→...`）。**因 NEXT 不跨方法，从某方法 `ROOT` 条件沿 NEXT 可达只会留在该函数体内**——按函数限域(ROOT 锚定)整链连通、可稳定渲染 | `codeOrder(Mk, S, D)` |
+| `(:Method\|:Value\|:CalledMethod\|:Condition)-[:NEXT]->(...)` | 时机（时序主轴）：事件级链，**只在单个方法体内**表达先后——块尾接到块外后续；**不建立跨函数的 NEXT**（不再有 `calledMethod→被调首事件`、`被调退出→calledReturn` 这类跨方法 NEXT），跨函数关联由 `CALLS`/`ARG_OF` 等逻辑边承载。**所有运行时 value 事件都入链**（函数体直排 value、实参列表/条件表达式内部读取、实参槽 CALLED_PARAM、嵌套调用 CALLED_RETURN、索引元素 INDEX、返回 RETURN），保证 method↔value、value↔value 时序连续、节点不孤立；实参槽在调用点按执行序入链（`...→实参求值→实参槽→调用→返回→...`）。**因 NEXT 不跨方法，从某方法 `Method` 节点沿 NEXT 可达只会留在该函数体内**——按函数限域(以 `Method` 为链首锚定)整链连通、可稳定渲染 | `codeOrder(Mk, S, D)` |
 | `(:Condition)-[:NEXT]->(then首事件)` / `(:Condition)-[:NEXT]->(else首事件)` | 分支入口：then/else 分支首事件都经 **NEXT** 从该条件直接进入顺序链（不物化 kind=ELSE 节点、无 ELSE/SUB 边；else-if 链也经 NEXT 连到其守卫值）；守卫表达式经 `CONTROLS` 查询。**if 条件节点的 NEXT 出边恒为 2（1 真 + 1 假），不多不少**：真路径→then 分支首事件；假路径→else 分支首事件（有 else 兜底，分叉受限，不再多连"整个 if 之后的下一个事件"）/ 下一事件的 fall-through（无 else）。**合并点（分支尾→下一事件）由分支尾承担，不占条件自己的分叉** | `toConditionValue→conditionItem` + 分支结构 |
 
 **NEXT 汇合（merge）规律**：下一个事件（合流点）由 NEXT 从**每条落到底的"叶终端"各汇入 1 条**。叶终端 = 一条走到底的链尾；**分叉条件自身不是叶终端**（它只作叉点，其分支尾才是）。于是：
@@ -200,7 +200,7 @@ loop 与 if 的根本区别是**循环**:循环体不"汇合到 next",而是**�
 
 ### 5.1 为什么方法上下文可以不落库
 
-跨方法的数据流必然穿过 called-instance（传参 `calledParam→param`、返回值 `return→calledReturn`），在**方法边界**处数据轴（FLOWS）与时序轴（经调用分形 `CALLS` 接入）天然相交于同一枢纽——但**时序轴（NEXT）本身不跨方法**，跨函数只由 `CALLS`/`RET_OF`/`ARG_OF` 等逻辑边表达。方法内数据流给出归属的方式：**Value 节点与调用点统一经 `NEXT` 链**（Condition 沿 NEXT 遍历即到达其块内含的全部运行时节点）归到所在条件/方法根 → 条件树 → Method。前提：**每个运行时节点都入 NEXT 顺序链**，否则远离调用边界的数据流节点无法找回方法。**因 NEXT 不跨方法，从某方法 ROOT 条件沿 NEXT 遍历正好落回该方法内**——方法上下文回归更干净、也不会因跨函数 NEXT 把别的函数误并入。
+跨方法的数据流必然穿过 called-instance（传参 `calledParam→param`、返回值 `return→calledReturn`），在**方法边界**处数据轴（FLOWS）与时序轴（经调用分形 `CALLS` 接入）天然相交于同一枢纽——但**时序轴（NEXT）本身不跨方法**，跨函数只由 `CALLS`/`ARG_OF` 等逻辑边表达。方法内数据流给出归属的方式：**Value 节点与调用点统一经 `NEXT` 链**（Condition 沿 NEXT 遍历即到达其块内含的全部运行时节点）归到所在条件 → 条件树 → Method。前提：**每个运行时节点都入 NEXT 顺序链**，否则远离调用边界的数据流节点无法找回方法。**因 NEXT 不跨方法，从某方法 `Method` 节点沿 NEXT 遍历正好落回该方法内**——方法上下文回归更干净、也不会因跨函数 NEXT 把别的函数误并入。
 
 ## 6. 旧 prolog → Neo4j 映射
 
@@ -214,7 +214,7 @@ loop 与 if 的根本区别是**循环**:循环体不"汇合到 next",而是**�
 | --- | --- | --- |
 | `simpleName(Key, Name)` | 2 | `{name}` |
 | `isFinal(Key)` | 1 | `{final: true}` |
-| `instanceOf(Key, Type)` | 2 | `{type}`（保留 TYPED_BY 边则额外有遍历能力） |
+| `instanceOf(Key, Type)` | 2 | `{type}`（`TYPED_BY` 边未实现，暂无沿类型遍历能力） |
 | `typeToPlFile(TypeKey, FilePath)` | 2 | `{filePath}`（Class） |
 | `package(Pkg, TypeKey)` | 2 | `{package}`（Class） |
 | `runtimeKey(Mk, Key, RK, KeyType)` | 4 | 运行时节点 `{key, kind}`（KeyType→kind） |
@@ -239,9 +239,12 @@ Neo4j 只支持二元关系，n 元谓词统一用三种方式降维：
 
 | 原事实 | 元数 | 转换 |
 | --- | --- | --- |
-| `calledParamToCalledReturn(Mk, CP, CR)` | 3 | `CP -[:ARG_OF]-> (calledMethod) <-[:RET_OF]- CR` |
-| `calledMethodToCalledReturn(Mk, CM, CR)` | 3 | CM 即 calledMethod，`CR -[:RET_OF]-> (calledMethod)` |
+| `calledParamToCalledReturn(Mk, CP, CR)` | 3 | `CP -[:ARG_OF]-> (calledMethod)`，**`RET_OF` 未实现**（见下）；实参↔返回经 calledMethod 枢纽的两跳 |
+| `calledMethodToCalledReturn(Mk, CM, CR)` | 3 | CM 即 calledMethod；`CR` 与它的归属边 **`RET_OF` 未实现**，目前靠 `(:Value{kind:CALLED_RETURN})` 节点 id 与调用点 range 对应 |
 | `calledReturnToCalledParam` / `calledReturnToCalledMethod` | 3 | 同上，全部隐式化为枢纽的扇入扇出 |
+
+> ⚠️ `RET_OF` 在 `GraphModel.REL_RET_OF` 有常量，但 `GraphExtractor` 从未 `addEdge` 过——okhttp 实测 0 条。
+> 引用它的查询会静默返回空集（不是"有边无数据"）。接入返回值使用与调用点的绑定需要补这条边。
 
 **模式 C：拆成"归属边 + 节点属性"**
 
@@ -253,13 +256,39 @@ Neo4j 只支持二元关系，n 元谓词统一用三种方式降维：
 ## 7. 搜索方向 → cypher 模板（草案）
 
 > 以下为概念模板，实现时再细化。旧项目 5 个方向的语义对应关系见 `shishandaimaViewer/README.md`。
+> 例子沿用旧项目的 `android.view.View`（okhttp 库里没有这个类，直接跑会返回 0）；
+> 想在本库验证，把 `m.name CONTAINS "View"` 换成一个真实方法名（如 `intercept`）即可。
 
 **调用（时机的分形）：** `android.view.View` 内部的调用栈
 ```cypher
-MATCH (m:Method)-[:ROOT]->(:Condition)-[:SUB*0..]->(c)-[:NEXT*1..8]->(cm:CalledMethod)-[:CALLS]->(m2:Method)
+MATCH (m:Method)-[:NEXT*]->(cm:CalledMethod)-[:CALLS]->(m2:Method)
 WHERE m.name CONTAINS "View"
-RETURN m, c, cm, m2
+RETURN m, cm, m2
 ```
+
+> ### NEXT 流搜索的三条规则
+>
+> **① 用无界 `-[:NEXT*]->`，不写上界。** 跳数取决于语句里嵌套子表达式的多少，没有稳定上界；
+> 写上界会**静默漏结果**（okhttp 实测：同一方法 `1..40` 只到 40 个节点，无界能到 379 个）。
+>
+> **② 必须以 `Method` 节点开头，且锚定到具体方法**（`{name:'…'}` + `file` 过滤）。
+> `Method -[:NEXT]->方法体首事件` 是链首边。**只写 `(m:Method)` 不锚定不够**——全库
+> 14779 个起点 × 各自的可达路径，实测 `count(p)` 跑 **6 分 52 秒未完**。
+>
+> **③ 别用 `RETURN p` 去枚举路径。** 同一张图、同一个展开，只换返回项：
+>
+> | 返回 | 结果 | 耗时 |
+> | --- | --- | --- |
+> | `count(DISTINCT b)` | 262650 | 秒回 |
+> | `count(p)` | — | 6分52秒+ 未完成 |
+>
+> 原因：NEXT 含 **5724 条循环回边**。Neo4j 变长关系默认 trail 语义（同一条边一次路径内不重复），
+> 所以**不会死循环、一定有限**，但"有限"不等于"能算完"——路径数随环数指数增长，`count(p)`
+> 要逐条实体化，`DISTINCT` 只要收敛后的节点集。要看时序链就**单方法锚定后**返回路径
+> （此时路径数有界）。
+>
+> 逻辑维度查询（`(:Value)-[:CONTROLS]->(c:Condition)-[:NEXT*]->(cm)`）起点是已锚定的**单个条件**，
+> 规模可控（实测 52 节点），不受此限。
 
 **数据流动：** 构造 View 时参数 context 如何被使用
 ```cypher
@@ -269,7 +298,7 @@ RETURN p, v
 
 **逻辑控制：** `mViewFlags` 控制了哪些调用
 ```cypher
-MATCH (f:Value {name:"mViewFlags"})-[:CONTROLS]->(:Condition)-[:NEXT*1..8]->(cm:CalledMethod)
+MATCH (f:Value {name:"mViewFlags"})-[:CONTROLS]->(:Condition)-[:NEXT*]->(cm:CalledMethod)
 RETURN f, cm
 ```
 

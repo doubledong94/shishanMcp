@@ -82,9 +82,14 @@ curl -s -X POST http://localhost:18081/api/run/generate_scip_index \
 例如验证「运行时节点是否经 NEXT 链归档」：
 
 ```sql
-MATCH (:Condition)-[:NEXT*1..8]->(n) RETURN labels(n)[0] AS k, count(*)   -- 调用 + Value 经 NEXT 链归档
+-- 调用 + Value 经 NEXT 链归档。**必须锚定一个 Method 起**、且**不要 RETURN 路径**：
+-- 全库无锚定的 `count(p)` 会挂住（实测 6 分 52 秒未完），换成 DISTINCT 计数即可秒回。
+MATCH (m:Method) WITH m LIMIT 1
+MATCH (m)-[:NEXT*]->(n) RETURN labels(n)[0] AS k, count(DISTINCT n)       -- 一次方法体内的归档
 MATCH (:CalledMethod)-[:CALLS]->(:Method) RETURN count(*)                -- 应约 5.6 万
 ```
+
+> NEXT 流搜索的三条规则见 `GRAPH_MODEL.md`（无界 / 必须 Method 起且锚定 / 别 `RETURN p` 枚路径）。
 
 ---
 
