@@ -194,12 +194,18 @@ MATCH (:Method{name:$m})-[:CALLS]<-[:CALLS]-(:CalledMethod)-[:ARG_OF]<-
 // 注意：被调方法内的时序要用**独立的 MATCH** 取，不能写成 WITH 里的模式表达式
 // （`WITH (callee)-[:NEXT*1..5]->(e) AS _ev` 会报 "Pattern expressions are not allowed to
 // introduce new variables"——cypher 不允许在表达式里绑定新变量）。
-MATCH p=(v:Value)-[:CONTROLS]->(c:Condition)-[:NEXT*]->(cm:CalledMethod)
-      -[:CALLS]->(callee:Method)
-WHERE v.id=$dataId
-MATCH (callee)-[:NEXT*]->(calleeEvent)
-RETURN v, cm, callee, calleeEvent LIMIT 20
+MATCH (v:Value {projectId:$project, name:$name})-[:CONTROLS]->(c:Condition)
+      -[:NEXT*]->(cm:CalledMethod)-[:CALLS]->(callee:Method)
+MATCH p=(callee)-[:NEXT*]->(e)
+UNWIND relationships(p) AS r
+WITH DISTINCT r
+MATCH (a)-[r]->(b)
+RETURN a, r, b
 ```
+
+- **`callee` 有多个时会与前一段做笛卡尔积**，所以这里绝不能 `RETURN v, cm, callee, calleeEvent`
+  逐组合枚举（实测 17489 行 / **31MB**）；折叠成去重边后 644 行 / 498KB，少 62 倍。
+- **无 LIMIT**：有界性靠锚定（`name` 收窄起点），不靠 LIMIT——LIMIT 只是懒拉取时静默截断。
 
 **数据的分形 正交性**：成员访问/下标（`REF`/`INDEX`）讲的是**结构**（哪个实例访问哪个成员、数组取哪个元素），不是**执行**（谁先谁后）。它是数据在结构层自相似递归的具现，与数据轴共用同一主轴语义，但在任意搜索节点（条件/调用点/值）上都可以与别的维度相交——即"相交搜索"的本质。
 

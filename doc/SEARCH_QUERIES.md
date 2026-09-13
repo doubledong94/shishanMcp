@@ -30,20 +30,23 @@ curl -s -X POST http://localhost:18081/api/run/query_graph \
 定位一个高层函数后，把它的整个调用链（含分支/占用）在调用（时序轴的"分形"）维度展开——**不显示 Value（数据）节点**。
 
 ```cypher
-MATCH p=(m:Method)-[:NEXT|CALLS*1..60]->(x)
-WHERE m.name='intercept'
-  AND coalesce(m.file, m.filePath) CONTAINS 'CallServerInterceptor'
-  AND NOT x:Value
-RETURN p LIMIT 2000
+MATCH (m:Method {projectId:$project, name:'intercept'})
+WHERE coalesce(m.file, m.filePath) CONTAINS 'CallServerInterceptor'
+MATCH p=(m)-[:NEXT|CALLS*]->(x {projectId:$project})
+WHERE NOT x:Value
+RETURN p
 ```
 
-- 起点 `m`：`name` + 文件过滤，精确锚定某个类里的同名方法（okhttp 有多个 `Interceptor.intercept`）。
-- 变长 `[:NEXT|CALLS*1..60]`：NEXT（Method→方法体首事件，及条件→块内运行时节点）→
-  CALLS（调用点→被调方法），两种边混着走、最多 60 跳，形成"从 intercept 向外扩散的调用闭包"。
+- 起点 `m`：`name` + 文件过滤，精确锚定某个类里的同名方法（okhttp 有 **18 个** `intercept`，
+  只给 `name` 会把它们一起锚定）。
+- 变长 `[:NEXT|CALLS*]`：NEXT（Method→方法体首事件，及条件→块内运行时节点）→
+  CALLS（调用点→被调方法），两种边混着走，形成"从 intercept 向外扩散的调用闭包"。
+  **不写上界**——跳数取决于嵌套子表达式多少，没有稳定上界，写上界会静默漏结果。
 - `NOT x:Value`：路径终点不是数据节点，所以返回的只有 `Method / CalledMethod / Condition` 三类。
 - 实测（CallServerInterceptor.intercept）：`1 起点 + 17 Method + 20 CalledMethod + 12 Condition = 50 节点`
   （旧值 91 是 NEXT 链上还挂着 METHOD 根条件、且 Condition 经 NEXT 直接相连时的口径；删掉根条件假节点后
   Condition 只剩真实分支节点，故变小）。
+- **无 LIMIT**：LIMIT 会在懒拉取里静默截断路径，少画的边不报错。有界性由锚定保证。
 
 ---
 
@@ -74,22 +77,29 @@ ORDER BY step
 
 ## 3. 函数体「完整时序链」（把 NEXT 渲染进图，含 Value 连接件）
 
-要把 NEXT 边真正**画**进前端图，就必须让路径上的 Value 连接件成为图节点（见 §5），返回整条 path：
+要把 NEXT 边真正**画**进前端图，就必须让路径上的 Value 连接件成为图节点（见 §5）。
+但**不能直接 `RETURN p`**——含环的 NEXT 流节点少、路径多，枚举路径会爆：
 
 ```cypher
 MATCH (m:Method {projectId: $project, name:'intercept'})
 WHERE m.file CONTAINS 'CallServerInterceptor'
-MATCH q=(m)-[:NEXT*]->(b)
-WHERE b.file=m.file AND b.line>=31 AND b.line<=135
-RETURN q LIMIT 400
+MATCH p=(m)-[:NEXT*]->(b {projectId:$project})
+WHERE b.file=m.file
+UNWIND relationships(p) AS r
+WITH DISTINCT r
+MATCH (a)-[r]->(b2)
+RETURN a, r, b2
 ```
 
 - **起点是 `Method` 节点**（`Method-[:NEXT]->方法体首事件`）。不能写成自由起点 `(a)-[:NEXT*]->(b)`
   再靠 `WHERE a.file=…` 收窄——那样 Neo4j 会先扫全库节点做无界展开再过滤，实测会挂住
   （见 `GRAPH_MODEL.md`「NEXT 流搜索的三条规则」）。
-- 只覆盖 `intercept` 函数体的行区间（31–135）；`CallServerInterceptor.kt` 之后的行属于其它方法（如
-  `writeResponseBody`），不算 intercept 的一层调用。
-- 返回 path `q` 才会被 `extractGraphView` 解析出 **NEXT 边**（`graph.service.ts` 只在遇到 Path 时 `addEdge`）。
+- **`UNWIND relationships(p) … WITH DISTINCT r` 是这条查询的要点**：同一方法体
+  `RETURN p` 实测 10s / **1.3GB**，折叠成去重边只要 2s / 309KB（393 条边）——
+  画到图上两者是**同一套边**，1.3GB 里 99% 是重复边的不同走法。
+- 返回边的两端节点 `a`/`r`/`b2`，前端按边渲染。**返回路径或返回裸关系都能被 `extractGraphView`
+  解析出边**（`graph.service.ts` 里 `isNeo4jPath` 和 `isNeo4jRel` 两个分支都在），
+  所以不需要为了出边而枚举路径。
 - 实测并入后：NEXT 边 +113，Value 节点 +87（都是相邻函数之间的 `callReturn→实参槽` 连接件）。
 
 ---
@@ -121,8 +131,22 @@ RETURN count(n)
    Value 连接件必然成为图节点。若只想看"函数层时序"而不想堆 Value，需要前端支持**隐藏 Value 压缩视图**
    （Value 作连接件、不画上画布，NEXT 边穿过它直连两个函数）——这是前端能力，不是查询能解决的。
 
-3. **变长路径一定要限长度**。`*1..N` 的 N 按需取（函数层 `*1..10` 够用）；`NOT x:Value` 的返回去重、
-   `DISTINCT` + `ORDER BY` 组合在 cypher 里会因分组限制报错，尽量投影成标量字符串或先 `WITH` 再排序。
+3. **变长路径不要写上界，也不要 `RETURN p` 枚举**（两条都改了）。
+   - **不写上界**：跳数取决于嵌套子表达式多少，没有稳定上界，写上界会**静默漏结果**
+     （实测同一方法 `1..40` 只到 40 个节点，无界能到 379 个，差 9 倍）。
+   - **不枚举路径**：含环时节点少、路径多——一个方法体 379 个节点 → 19238 条路径
+     （10s / 1.3GB）。返回**去重边**：`UNWIND relationships(p) AS r WITH DISTINCT r RETURN a, r, b`，
+     同一方法体 2s / 309KB，画出来是同一套边。
+   - 有界性靠**锚定**保证（`name` 收窄，同名多时再加 `file`），不靠 `LIMIT`——LIMIT 只是
+     懒拉取时静默截断，少画的边不报错，比挂住更隐蔽。详见 `GRAPH_MODEL.md`「NEXT 流搜索的三条规则」。
+   - 另外 `NOT x:Value` 的返回去重、`DISTINCT` + `ORDER BY` 组合在 cypher 里会因分组限制报错，
+     尽量投影成标量字符串或先 `WITH` 再排序。
 
 4. **`$project` 参数**：`query_graph`/`/api/graph/query` 会注入 `$project`（项目名）；去重的 `mergeCurrent`
    靠节点 id 稳定去重，同一节点多次查询不会重复出现。
+
+5. **`OVERRIDES` 的反向边已修**。聚合器的 `--emit-inverse-relationships`（默认开）会给每个被覆写的
+   接口方法补一条指向各实现方法的反边，是给 Sourcegraph find-references 用的补丁。它在图谱里表现为
+   同名方法的 `OVERRIDES` 成对出现（实测 okhttp：1363 条里 678 对），无界 `OVERRIDES*` 会在两节点间
+   来回弹而挂死（`polymorphism` 曾因此不可用）。**已在聚合器里对图模式掐掉**（`ScipAggregator.
+   computeInverseReferences`），重索引后 678 对归零，`polymorphism` 无界也只 1-2s。
