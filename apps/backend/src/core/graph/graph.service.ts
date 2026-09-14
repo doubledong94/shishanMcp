@@ -719,25 +719,49 @@ function round3(v: number): number {
   return Math.round(v * 1000) / 1000;
 }
 
-/** 合并两幅图：按节点 id、边 key（from->to->label）去重求并集，rows 取最新的。 */
+/**
+ * 合并两幅图：按**节点身份键**、边 key（from->to->label）去重求并集，rows 取最新的。
+ *
+ * 身份键用 stableId 而非 id：`id` 是 `node-<Neo4j 内部 identity>`，而 identity 在每次重建
+ * 索引后全变。同一张工作图若跨越一次 reindex 继续叠加（修一个 bug → 重新索引 → 再搜一次），
+ * 同一个源码节点在新旧两批结果里的 `id` 不同，按 id 去重就会留下**两份**：一份只挂旧查询的边、
+ * 一份只挂新查询的边，画面上表现为"同一个 if 被拆成两半，一半在 NEXT 流里、一半只有 CONTROLS"。
+ * stableId（Neo4j 的 `id` 属性 = SCIP 稳定符号 id）跨重建不变，正是该用的键；布局坐标也早已
+ * 用它（见 readLayout/writeLayout）。
+ *
+ * 合并后需把边重映射到「保留下来」的那个 id 上，否则被丢弃副本的边会指向不存在的节点。
+ */
 function mergeGraphs(a: { nodes: GraphNode[]; edges: GraphEdge[]; rows?: string[] }, b: { nodes: GraphNode[]; edges: GraphEdge[]; rows?: string[] }): GraphView {
-  const nodes = [...(a.nodes || [])];
-  const edges = [...(a.edges || [])];
-  const nodeSeen = new Set(nodes.map((n) => n.id));
-  const edgeSeen = new Set(edges.map((e) => `${e.from}->${e.to}->${e.label}->${JSON.stringify(e.props || {})}`));
-  for (const n of b.nodes || []) {
-    if (!nodeSeen.has(n.id)) {
-      nodeSeen.add(n.id);
+  const nodes: GraphNode[] = [];
+  // 身份键 → 保留节点的 id。没有 stableId 的节点（如 Result/枚举产物）退回用 id 本身当键。
+  const keyToId = new Map<string, string>();
+  const idRemap = new Map<string, string>(); // 被丢弃副本 id → 保留 id
+  const add = (n: GraphNode) => {
+    const key = n.stableId || n.id;
+    const kept = keyToId.get(key);
+    if (kept === undefined) {
+      keyToId.set(key, n.id);
       nodes.push(n);
+    } else if (kept !== n.id) {
+      idRemap.set(n.id, kept);
     }
-  }
-  for (const e of b.edges || []) {
-    const key = `${e.from}->${e.to}->${e.label}->${JSON.stringify(e.props || {})}`;
-    if (!edgeSeen.has(key)) {
-      edgeSeen.add(key);
-      edges.push(e);
-    }
-  }
+  };
+  for (const n of a.nodes || []) add(n);
+  for (const n of b.nodes || []) add(n);
+
+  const remap = (id: string) => idRemap.get(id) ?? id;
+  const edges: GraphEdge[] = [];
+  const edgeSeen = new Set<string>();
+  const addEdge = (e: GraphEdge) => {
+    const from = remap(e.from);
+    const to = remap(e.to);
+    const key = `${from}->${to}->${e.label}->${JSON.stringify(e.props || {})}`;
+    if (edgeSeen.has(key)) return;
+    edgeSeen.add(key);
+    edges.push(from === e.from && to === e.to ? e : { ...e, from, to });
+  };
+  for (const e of a.edges || []) addEdge(e);
+  for (const e of b.edges || []) addEdge(e);
   return { nodes, edges, rows: (b.rows?.length ? b.rows : a.rows) };
 }
 
