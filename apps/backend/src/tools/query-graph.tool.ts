@@ -24,6 +24,39 @@ import { mountedProjectList, mountedProjectsHint } from "./mounted-projects";
  *       而画到图上两者是同一套边。{@code count(p)} 更糟（要实体化全部路径）。
  * </ol>
  */
+/**
+ * codeorder / order_* 共用的收尾：从锚点（方法或条件）的 NEXT 链得到 body，补进运算符节点，
+ * 再取出 body 内的 NEXT/FLOWS/REF 边。
+ *
+ * <p><b>为什么要单独补运算符节点</b>：运算符只入 FLOWS、不入 NEXT（见 GraphExtractor
+ * 的 emitOperatorIfAny），所以 `NEXT*` 走不到它们。但它们是操作数汇聚的值枢纽，
+ * 不补进来 `responseBuilder` 那条 NEXT 链就会缺一段。
+ *
+ * <p><b>三条去重规则</b>（同一对节点只画最有信息量的一条）：
+ * <ul>
+ *   <li>NEXT 让位 FLOWS —— 数据依赖比时序相邻更有信息量。
+ *   <li>NEXT 让位 REF —— 同理。实测同一对节点上 NEXT 与 REF 同向（47/47，反向 0），
+ *       故用同一条方向判断即可，不会出现"该让的没让、不该让的让了"。
+ *   <li>FLOWS 与 REF 可以共存 —— 它们讲的是两件事（值怎么合成 / 哪个实例访问哪个成员）。
+ * </ul>
+ *
+ * <p>REF 只保留<b>两端都在 body 内</b>的边，不把 body 外的目标节点拉进来：本 preset 的语义是
+ * "这个函数体内发生了什么"，`exchange → connection` 的 connection 声明在别的文件里，
+ * 拉进来会让图超出方法体。实测这样保留 134/172 条（其余 38 条目标在体外）。
+ *
+ * @param anchor body 的锚点变量名（codeorder 是 `m`，order_* 是 `c`）
+ */
+function bodyTail(anchor: string): string {
+  return (
+    `OPTIONAL MATCH (o:Value {projectId:$project, kind:'OPERATOR'})-[:FLOWS*1..8]-(y) ` +
+    "WHERE o.file CONTAINS $file AND y IN body " +
+    `WITH ${anchor}, body, collect(DISTINCT o) AS ops ` +
+    `WITH ${anchor}, body + [x IN ops WHERE x IS NOT NULL] AS full ` +
+    "UNWIND full AS a MATCH (a)-[r:NEXT|FLOWS|REF]->(b) " +
+    "WHERE b IN full AND NOT (r:NEXT AND ((a)-[:FLOWS]->(b) OR (a)-[:REF]->(b))) RETURN a, r, b"
+  );
+}
+
 const PRESETS: Record<string, { description: string; needsParam: boolean; cypher: string }> = {
   nesting: {
     description: "数据的分形：某实例引用出发的 引用→调用点→被调方法（需 param=值名）",
@@ -76,51 +109,38 @@ const PRESETS: Record<string, { description: string; needsParam: boolean; cypher
   },
   codeorder: {
     description:
-      "时机（时序主轴）+ 数据流：某方法体内的执行先后与值流向（需 param=方法名，从该方法沿 NEXT 走到函数尾）。" +
-      "同一对节点若既有 FLOWS 又有 NEXT，只画 FLOWS（数据依赖比时序相邻更有信息量，也避免两条边重叠）。" +
+      "时机（时序主轴）+ 数据流 + 成员访问：某方法体内的执行先后、值流向、实例引用（需 param=方法名，" +
+      "从该方法沿 NEXT 走到函数尾）。同一对节点上 NEXT 让位 FLOWS/REF（数据依赖、成员引用都比时序相邻更有信息量）；" +
+      "FLOWS 与 REF 可共存（值怎么合成 / 哪个实例访问哪个成员，是两件事）。" +
+      "REF 只画两端都在方法体内的，不把体外目标拉进来。" +
       "同名方法多时会一起锚定（okhttp 有 18 个 intercept），用 file 收窄到某一个",
     needsParam: true,
     cypher:
       "MATCH (m:Method {projectId:$project, name:$name}) WHERE m.file CONTAINS $file " +
       "MATCH (m)-[:NEXT*]->(v {projectId:$project}) WITH m, collect(DISTINCT v) + m AS body " +
-      "OPTIONAL MATCH (o:Value {projectId:$project, kind:'OPERATOR'})-[:FLOWS*1..8]-(y) " +
-      "WHERE o.file CONTAINS $file AND y IN body " +
-      "WITH m, body, collect(DISTINCT o) AS ops " +
-      "WITH m, body + [x IN ops WHERE x IS NOT NULL] AS full " +
-      "UNWIND full AS a MATCH (a)-[r:NEXT|FLOWS]->(b) " +
-      "WHERE b IN full AND NOT (r:NEXT AND (a)-[:FLOWS]->(b)) RETURN a, r, b",
+      bodyTail("m"),
   },
   order_true: {
     description:
-      "某表达式为 true 时的时序 + 数据流（需 param=表达式名，经 CONTROLS 找条件、走 then 的 NEXT 链）。" +
-      "同一对节点若既有 FLOWS 又有 NEXT，只画 FLOWS",
+      "某表达式为 true 时的时序 + 数据流 + 成员访问（需 param=表达式名，经 CONTROLS 找条件、走 then 的 NEXT 链）。" +
+      "同一对节点上 NEXT 让位 FLOWS/REF；FLOWS 与 REF 可共存",
     needsParam: true,
     cypher:
       "MATCH (e:Value {projectId:$project, name:$name}) WHERE e.file CONTAINS $file " +
       "MATCH (e)-[:CONTROLS]->(c:Condition) MATCH (c)-[:NEXT*]->(v {projectId:$project}) " +
       "WITH c, collect(DISTINCT v) + c AS body " +
-      "OPTIONAL MATCH (o:Value {projectId:$project, kind:'OPERATOR'})-[:FLOWS*1..8]-(y) " +
-      "WHERE o.file CONTAINS $file AND y IN body " +
-      "WITH c, body, collect(DISTINCT o) AS ops " +
-      "WITH c, body + [x IN ops WHERE x IS NOT NULL] AS full " +
-      "UNWIND full AS a MATCH (a)-[r:NEXT|FLOWS]->(b) " +
-      "WHERE b IN full AND NOT (r:NEXT AND (a)-[:FLOWS]->(b)) RETURN a, r, b",
+      bodyTail("c"),
   },
   order_false: {
     description:
-      "某表达式为 false 时的时序 + 数据流（需 param=表达式名，走条件 else 分支的链）。" +
-      "同一对节点若既有 FLOWS 又有 NEXT，只画 FLOWS",
+      "某表达式为 false 时的时序 + 数据流 + 成员访问（需 param=表达式名，走条件 else 分支的链）。" +
+      "同一对节点上 NEXT 让位 FLOWS/REF；FLOWS 与 REF 可共存",
     needsParam: true,
     cypher:
       "MATCH (e:Value {projectId:$project, name:$name}) WHERE e.file CONTAINS $file " +
       "MATCH (e)-[:CONTROLS]->(c:Condition) MATCH (c)-[:NEXT {branch:'false'}]->(v {projectId:$project}) " +
       "WITH c, collect(DISTINCT v) + c AS body " +
-      "OPTIONAL MATCH (o:Value {projectId:$project, kind:'OPERATOR'})-[:FLOWS*1..8]-(y) " +
-      "WHERE o.file CONTAINS $file AND y IN body " +
-      "WITH c, body, collect(DISTINCT o) AS ops " +
-      "WITH c, body + [x IN ops WHERE x IS NOT NULL] AS full " +
-      "UNWIND full AS a MATCH (a)-[r:NEXT|FLOWS]->(b) " +
-      "WHERE b IN full AND NOT (r:NEXT AND (a)-[:FLOWS]->(b)) RETURN a, r, b",
+      bodyTail("c"),
   },
 };
 
