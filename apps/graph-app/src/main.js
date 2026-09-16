@@ -1018,6 +1018,11 @@ const EDGE_DIM_OF = {
   REF: "dataFractal", REFERENCES: "dataFractal", INDEX: "dataFractal",
   // 逻辑：CONTROLS（守卫）；分支流向一律由 NEXT 表达（无 SUB/ELSE/LEADS_TO/ROOT）
   CONTROLS: "logic",
+  // 调用点接头边：数据进出调用点。归入"数据的分形"族——它们和 REF/INDEX 一样，
+  // 讲的是数据在结构上挂到哪（而非值怎么流动），是数据轴与调用分形轴的交接
+  // （见 doc/SEARCH_GUIDE.md「调用点接头边（本身不成维度）」）。
+  PARAM_TO_METHOD: "dataFractal",
+  METHOD_TO_RETURN: "dataFractal",
 };
 /** 按 sRGB 十六进制构色，跳过 ColorManagement 的 sRGB→线性转换。
  *  本应用边用自定义 ShaderMaterial 原样输出颜色，若 new THREE.Color(0x…) 把它转成线性，
@@ -1034,7 +1039,7 @@ const EDGE_DIM_COLOR = {
   logic:         srgbHex(0x2f80ed), // 亮蓝   逻辑 条件树（独立，理性蓝）
   other:         srgbHex(0x8b949e), // 中性灰 未纳入
 };
-/** 边 label → 维度颜色；未纳入各轴维度的（DECLARES/HAS_PARAM/RETURNS/ARG_OF…）归为灰。 */
+/** 边 label → 维度颜色；未纳入各轴维度的（DECLARES/HAS_PARAM/RETURNS…）归为灰。 */
 function edgeDimColorFor(label, out) {
   const dim = EDGE_DIM_OF[label] || "other";
   out.copy(EDGE_DIM_COLOR[dim]);

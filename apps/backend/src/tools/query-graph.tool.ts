@@ -43,14 +43,16 @@ import { mountedProjectList, mountedProjectsHint } from "./mounted-projects";
  *       CONTROLS 说"这个值决定走哪个分支"（守卫关系）。实测 1,093 条 CONTROLS 与其
  *       守卫读→条件 的 NEXT 同向且并存，让位会丢掉"谁守卫了这个分支"这条关键语义。
  *       CONTROLS 也不与 FLOWS/REF 冲突（它指向 Condition，不是 Value）。
- *   <li>ARG_OF / RET_OF 与 NEXT 也共存 —— 它们连的是"数据进出调用点"：
- *       ARG_OF（实参→调用点）与 NEXT 同向且平行（46 条里 38 条有平行 NEXT），
- *       RET_OF（返回值→调用点）则与 NEXT **反向**（调用点→返回值的 NEXT 才是
- *       那 69 条里的主流），画出来根本不重叠。让位会丢掉"哪些数据参与了这次调用"。
- *   <li>ARG_OF / RET_OF 端点固定为 Value→CalledMethod，不拉进 body 外的节点。
+ *   <li>PARAM_TO_METHOD / METHOD_TO_RETURN 与 NEXT 也共存 —— 它们连"数据进出调用点"：
+ *       PARAM_TO_METHOD（实参→调用点）与 NEXT 同向且平行（46 条里 38 条有平行 NEXT），
+ *       让位会丢掉"这个值是作为实参进去的"。METHOD_TO_RETURN（调用点→返回值）与
+ *       CalledMethod→CALLED_RETURN 的 NEXT 同向同对，前端"同对节点不画两条"会让它被
+ *       NEXT 挡住 —— 但它是 调用点→返回值 这一跳的**语义命名**，与 PARAM_TO_METHOD
+ *       拼成同向链，故保留（被挡掉不报错，只是不重复画线）。
+ *   <li>两条接头边端点固定为 Value↔CalledMethod，不拉进 body 外的节点。
  * </ul>
  *
- * <p>REF / CONTROLS / ARG_OF / RET_OF 只保留<b>两端都在 body 内</b>的边，不把 body 外的
+ * <p>REF / CONTROLS / PARAM_TO_METHOD / METHOD_TO_RETURN 只保留<b>两端都在 body 内</b>的边，不把 body 外的
  * 目标节点拉进来：本 preset 的语义是"这个函数体内发生了什么"，`exchange → connection`
  * 的 connection 声明在别的文件里，拉进来会让图超出方法体。实测 REF 这样保留 134/172 条。
  *
@@ -62,7 +64,7 @@ function bodyTail(anchor: string): string {
     "WHERE o.file CONTAINS $file AND y IN body " +
     `WITH ${anchor}, body, collect(DISTINCT o) AS ops ` +
     `WITH ${anchor}, body + [x IN ops WHERE x IS NOT NULL] AS full ` +
-    "UNWIND full AS a MATCH (a)-[r:NEXT|FLOWS|REF|CONTROLS|ARG_OF|RET_OF]->(b) " +
+    "UNWIND full AS a MATCH (a)-[r:NEXT|FLOWS|REF|CONTROLS|PARAM_TO_METHOD|METHOD_TO_RETURN]->(b) " +
     "WHERE b IN full AND NOT (r:NEXT AND ((a)-[:FLOWS]->(b) OR (a)-[:REF]->(b))) RETURN a, r, b"
   );
 }
@@ -115,18 +117,18 @@ const PRESETS: Record<string, { description: string; needsParam: boolean; cypher
       "相交：数据流(值→实参) ∩ 数据的分形(实例→调用) 汇聚于同一调用点（需 param=值名，锚定数据流起点）",
     needsParam: true,
     cypher:
-      "MATCH (v1:Value {projectId:$project, name:$name})-[:FLOWS]->(cp:Value {projectId:$project,kind:'CALLED_PARAM'})-[:ARG_OF]->(cm:CalledMethod)-[:CALLS]->(m:Method) MATCH (v2:Value {projectId:$project})-[:REF]->(cm) RETURN v1, cp, cm, m, v2",
+      "MATCH (v1:Value {projectId:$project, name:$name})-[:FLOWS]->(cp:Value {projectId:$project,kind:'CALLED_PARAM'})-[:PARAM_TO_METHOD]->(cm:CalledMethod)-[:CALLS]->(m:Method) MATCH (v2:Value {projectId:$project})-[:REF]->(cm) RETURN v1, cp, cm, m, v2",
   },
   codeorder: {
     description:
       "某方法体内的四个维度 + 调用点接头：执行先后(NEXT) + 值流向(FLOWS) + 成员访问(REF)" +
-      " + 分支守卫(CONTROLS) + 数据进出调用(ARG_OF/RET_OF)" +
+      " + 分支守卫(CONTROLS) + 数据进出调用(PARAM_TO_METHOD/METHOD_TO_RETURN)" +
       "（需 param=方法名，从该方法沿 NEXT 走到函数尾）。" +
       "同一对节点上 NEXT 让位 FLOWS/REF（数据依赖、成员引用都比时序相邻更有信息量）；" +
       "FLOWS 与 REF 可共存（值怎么合成 / 哪个实例访问哪个成员，是两件事）；" +
       "CONTROLS 也与 NEXT 共存（守卫关系与时序是两件事，让位就丢了\"谁守卫了这个分支\"）；" +
-      "ARG_OF/RET_OF 同理共存（数据进出调用点是独立语义）。" +
-      "REF/CONTROLS/ARG_OF/RET_OF 只画两端都在方法体内的，不把体外目标拉进来。" +
+      "PARAM_TO_METHOD/METHOD_TO_RETURN 同理共存（数据进出调用点是独立语义）。" +
+      "REF/CONTROLS/PARAM_TO_METHOD/METHOD_TO_RETURN 只画两端都在方法体内的，不把体外目标拉进来。" +
       "同名方法多时会一起锚定（okhttp 有 18 个 intercept），用 file 收窄到某一个",
     needsParam: true,
     cypher:
@@ -137,9 +139,9 @@ const PRESETS: Record<string, { description: string; needsParam: boolean; cypher
   order_true: {
     description:
       "某表达式为 true 时的四个维度 + 调用点接头：执行先后 + 值流向 + 成员访问 + 分支守卫" +
-      " + 数据进出调用(ARG_OF/RET_OF)" +
+      " + 数据进出调用(PARAM_TO_METHOD/METHOD_TO_RETURN)" +
       "（需 param=表达式名，经 CONTROLS 找条件、走 then 的 NEXT 链）。" +
-      "同一对节点上 NEXT 让位 FLOWS/REF；FLOWS 与 REF、CONTROLS/ARG_OF/RET_OF 与 NEXT 各自可共存",
+      "同一对节点上 NEXT 让位 FLOWS/REF；FLOWS 与 REF、CONTROLS/PARAM_TO_METHOD/METHOD_TO_RETURN 与 NEXT 各自可共存",
     needsParam: true,
     cypher:
       "MATCH (e:Value {projectId:$project, name:$name}) WHERE e.file CONTAINS $file " +
@@ -150,9 +152,9 @@ const PRESETS: Record<string, { description: string; needsParam: boolean; cypher
   order_false: {
     description:
       "某表达式为 false 时的四个维度 + 调用点接头：执行先后 + 值流向 + 成员访问 + 分支守卫" +
-      " + 数据进出调用(ARG_OF/RET_OF)" +
+      " + 数据进出调用(PARAM_TO_METHOD/METHOD_TO_RETURN)" +
       "（需 param=表达式名，走条件 else 分支的链）。" +
-      "同一对节点上 NEXT 让位 FLOWS/REF；FLOWS 与 REF、CONTROLS/ARG_OF/RET_OF 与 NEXT 各自可共存",
+      "同一对节点上 NEXT 让位 FLOWS/REF；FLOWS 与 REF、CONTROLS/PARAM_TO_METHOD/METHOD_TO_RETURN 与 NEXT 各自可共存",
     needsParam: true,
     cypher:
       "MATCH (e:Value {projectId:$project, name:$name}) WHERE e.file CONTAINS $file " +

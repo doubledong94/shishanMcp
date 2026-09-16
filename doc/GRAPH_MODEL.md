@@ -65,7 +65,7 @@ NEO4J_DATABASE  # 可选
 
 | 节点 | 关键属性 | 说明 |
 | --- | --- | --- |
-| `:CalledMethod` | `id, file, line, method` | 一处调用点；同时是 ARG_OF / RET_OF 的枢纽（数据进出调用的接头） |
+| `:CalledMethod` | `id, file, line, method` | 一处调用点；同时是 PARAM_TO_METHOD / METHOD_TO_RETURN 的枢纽（数据进出调用的接头） |
 | `:Value`（运行时形态） | `id, kind, name, type, file, line, read, write` | kind 实测 9 种：CALLED_RETURN / CALLED_PARAM / LITERAL / FIELD / LOCAL_VAR / PARAM / RETURN / INDEX / THROW，对应旧 `GlobalInfo.h` 的 KEY_TYPE_*（`DEFAULT_VALUE`/`KEY_WORD_VALUE`/`ENUM_INSTANCE`/`ANONYMOUS_CLASS` 在枚举里但当前索引未产出） |
 | `:Condition` | `id, kind, file, line` | 分支节点，kind 实测仅 4 种：**IF / LOOP / TRY / FINALLY**（`FOR`/`WHILE` 归一到 `LOOP`；**无 CATCH 节点**——catch 体从 TRY 直接经 NEXT 扇出进入，该边带 `exception=<异常类型全名>` 属性区分；也**无 METHOD 根条件节点**） |
 
@@ -91,12 +91,12 @@ NEO4J_DATABASE  # 可选
 | `(:Condition)-[:NEXT]->(嵌套条件首事件)` | 分支嵌套：嵌套 if/循环在分支内，经分支的 NEXT 链进入（无 SUB 边） | super→sub condition |
 | `(:Condition)-[:NEXT]->(else-if 守卫值)` | else-if 链：前个 if 的假路径经 NEXT 进入下个 else-if 的守卫值，不再物化 kind=ELSE 节点/ELSE 边 | Condition→Else→Condition |
 | `(:CalledMethod)-[:CALLS]->(:Method)` | 调用点解析到被调方法声明 | calledMethod→TimingStep→method |
-| `(:Value)-[:ARG_OF]->(:CalledMethod)` | 实参属于哪个调用点 | calledParamToCalledReturn 等 |
-| `(:Value)-[:RET_OF]->(:CalledMethod)` | 返回值属于哪个调用点（`ARG_OF` 的反向搭档：实参进、返回出） | 同上 |
+| `(:Value)-[:PARAM_TO_METHOD]->(:CalledMethod)` | 实参属于哪个调用点 | calledParamToCalledReturn 等 |
+| `(:CalledMethod)-[:METHOD_TO_RETURN]->(:Value)` | 调用点产出哪个返回值（与 `PARAM_TO_METHOD` 拼成同向链：实参→调用点→返回值） | 同上 |
 | `(:Value)-[:FLOWS]->(:Value)` | 数据流（赋值/读写/传参/返回值） | `flow(Mk, S, D)` |
 | `(:Value)-[:CONTROLS]->(:Condition)` | 条件变量守卫哪个分支 | `toConditionValue→conditionItem` |
 | `(:Value)-[:REF]->(:CalledMethod)` | 数据的分形：实例引用访问成员 | Reference |
-| `(:Method\|:Value\|:CalledMethod\|:Condition)-[:NEXT]->(...)` | 时机（时序主轴）：事件级链，**只在单个方法体内**表达先后——块尾接到块外后续；**不建立跨函数的 NEXT**（不再有 `calledMethod→被调首事件`、`被调退出→calledReturn` 这类跨方法 NEXT），跨函数关联由 `CALLS`/`ARG_OF` 等逻辑边承载。**所有运行时 value 事件都入链**（函数体直排 value、实参列表/条件表达式内部读取、实参槽 CALLED_PARAM、嵌套调用 CALLED_RETURN、索引元素 INDEX、返回 RETURN），保证 method↔value、value↔value 时序连续、节点不孤立；实参槽在调用点按执行序入链（`...→实参求值→实参槽→调用→返回→...`）。**因 NEXT 不跨方法，从某方法 `Method` 节点沿 NEXT 可达只会留在该函数体内**——按函数限域(以 `Method` 为链首锚定)整链连通、可稳定渲染 | `codeOrder(Mk, S, D)` |
+| `(:Method\|:Value\|:CalledMethod\|:Condition)-[:NEXT]->(...)` | 时机（时序主轴）：事件级链，**只在单个方法体内**表达先后——块尾接到块外后续；**不建立跨函数的 NEXT**（不再有 `calledMethod→被调首事件`、`被调退出→calledReturn` 这类跨方法 NEXT），跨函数关联由 `CALLS`/`PARAM_TO_METHOD` 等逻辑边承载。**所有运行时 value 事件都入链**（函数体直排 value、实参列表/条件表达式内部读取、实参槽 CALLED_PARAM、嵌套调用 CALLED_RETURN、索引元素 INDEX、返回 RETURN），保证 method↔value、value↔value 时序连续、节点不孤立；实参槽在调用点按执行序入链（`...→实参求值→实参槽→调用→返回→...`）。**因 NEXT 不跨方法，从某方法 `Method` 节点沿 NEXT 可达只会留在该函数体内**——按函数限域(以 `Method` 为链首锚定)整链连通、可稳定渲染 | `codeOrder(Mk, S, D)` |
 | `(:Condition)-[:NEXT]->(then首事件)` / `(:Condition)-[:NEXT]->(else首事件)` | 分支入口：then/else 分支首事件都经 **NEXT** 从该条件直接进入顺序链（不物化 kind=ELSE 节点、无 ELSE/SUB 边；else-if 链也经 NEXT 连到其守卫值）；守卫表达式经 `CONTROLS` 查询。**if 条件节点的 NEXT 出边恒为 2（1 真 + 1 假），不多不少**：真路径→then 分支首事件；假路径→else 分支首事件（有 else 兜底，分叉受限，不再多连"整个 if 之后的下一个事件"）/ 下一事件的 fall-through（无 else）。**合并点（分支尾→下一事件）由分支尾承担，不占条件自己的分叉** | `toConditionValue→conditionItem` + 分支结构 |
 
 **NEXT 汇合（merge）规律**：下一个事件（合流点）由 NEXT 从**每条落到底的"叶终端"各汇入 1 条**。叶终端 = 一条走到底的链尾；**分叉条件自身不是叶终端**（它只作叉点，其分支尾才是）。于是：
@@ -200,7 +200,7 @@ loop 与 if 的根本区别是**循环**:循环体不"汇合到 next",而是**�
 
 ### 5.1 为什么方法上下文可以不落库
 
-跨方法的数据流必然穿过 called-instance（传参 `calledParam→param`、返回值 `return→calledReturn`），在**方法边界**处数据轴（FLOWS）与时序轴（经调用分形 `CALLS` 接入）天然相交于同一枢纽——但**时序轴（NEXT）本身不跨方法**，跨函数只由 `CALLS`/`ARG_OF` 等逻辑边表达。方法内数据流给出归属的方式：**Value 节点与调用点统一经 `NEXT` 链**（Condition 沿 NEXT 遍历即到达其块内含的全部运行时节点）归到所在条件 → 条件树 → Method。前提：**每个运行时节点都入 NEXT 顺序链**，否则远离调用边界的数据流节点无法找回方法。**因 NEXT 不跨方法，从某方法 `Method` 节点沿 NEXT 遍历正好落回该方法内**——方法上下文回归更干净、也不会因跨函数 NEXT 把别的函数误并入。
+跨方法的数据流必然穿过 called-instance（传参 `calledParam→param`、返回值 `return→calledReturn`），在**方法边界**处数据轴（FLOWS）与时序轴（经调用分形 `CALLS` 接入）天然相交于同一枢纽——但**时序轴（NEXT）本身不跨方法**，跨函数只由 `CALLS`/`PARAM_TO_METHOD` 等逻辑边表达。方法内数据流给出归属的方式：**Value 节点与调用点统一经 `NEXT` 链**（Condition 沿 NEXT 遍历即到达其块内含的全部运行时节点）归到所在条件 → 条件树 → Method。前提：**每个运行时节点都入 NEXT 顺序链**，否则远离调用边界的数据流节点无法找回方法。**因 NEXT 不跨方法，从某方法 `Method` 节点沿 NEXT 遍历正好落回该方法内**——方法上下文回归更干净、也不会因跨函数 NEXT 把别的函数误并入。
 
 ## 6. 旧 prolog → Neo4j 映射
 
@@ -239,11 +239,11 @@ Neo4j 只支持二元关系，n 元谓词统一用三种方式降维：
 
 | 原事实 | 元数 | 转换 |
 | --- | --- | --- |
-| `calledParamToCalledReturn(Mk, CP, CR)` | 3 | `CP -[:ARG_OF]-> (calledMethod)`，`CR -[:RET_OF]-> (calledMethod)`；实参↔返回经 calledMethod 枢纽的两跳 |
-| `calledMethodToCalledReturn(Mk, CM, CR)` | 3 | CM 即 calledMethod；`CR` 经 **`RET_OF`** 归属于它（两者 id 同取调用点位置） |
-| `calledReturnToCalledParam` / `calledReturnToCalledMethod` | 3 | 同上，全部隐式化为枢纽的扇入扇出；`RET_OF` 已建 |
+| `calledParamToCalledReturn(Mk, CP, CR)` | 3 | `CP -[:PARAM_TO_METHOD]-> (calledMethod) -[:METHOD_TO_RETURN]-> CR`；实参↔返回经 calledMethod 枢纽的两跳（同向） |
+| `calledMethodToCalledReturn(Mk, CM, CR)` | 3 | CM 即 calledMethod；`CM -[:METHOD_TO_RETURN]-> CR`（两者 id 同取调用点位置，故必然连得上） |
+| `calledReturnToCalledParam` / `calledReturnToCalledMethod` | 3 | 同上，全部隐式化为枢纽的扇入扇出；`METHOD_TO_RETURN` 已建 |
 
-> `RET_OF` 已实现（`GraphExtractor.enterInvocation` 在建 CALLED_RETURN 槽处 addEdge，
+> `METHOD_TO_RETURN` 已实现（`GraphExtractor.enterInvocation` 在建 CALLED_RETURN 槽处 addEdge，
 > 与 `callSiteId` 同一位置）。此前只有常量、从未 addEdge，引用它的查询会**静默返回空集**。
 
 **模式 C：拆成"归属边 + 节点属性"**
@@ -335,7 +335,7 @@ RETURN v, cm, m
 
 **相交搜索：** 找出将 `i1` 传入 `a1.a` 的调用（B.i1 数据流 与 B.a1 成员访问(数据的分形) 交于同一 calledMethod）
 ```cypher
-MATCH (v1:Value {name:"i1"})-[:FLOWS]->(cp:Value)-[:ARG_OF]->(cm:CalledMethod)
+MATCH (v1:Value {name:"i1"})-[:FLOWS]->(cp:Value)-[:PARAM_TO_METHOD]->(cm:CalledMethod)
 MATCH (v2:Value {name:"a1"})-[:REF]->(cm)
 RETURN cm, v1, v2
 ```
