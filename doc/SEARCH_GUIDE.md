@@ -51,7 +51,7 @@
 
 | 谓词 | 语义 | 新项目等价 |
 | --- | --- | --- |
-| `calledParamToCalledReturn(Mk, CP, CR)` | 实参↔调用返回 | `(:Value{kind:CALLED_PARAM})-[:ARG_OF]->(:CalledMethod)`（`RET_OF` **未实现**，见 §11.3） |
+| `calledParamToCalledReturn(Mk, CP, CR)` | 实参↔调用返回 | `(:Value{kind:CALLED_PARAM})-[:ARG_OF]->(:CalledMethod)`（`RET_OF` 见 §11.3） |
 | `calledMethodToCalledReturn(Mk, CM, CR)` | 调用点↔调用返回 | 同上；`CALLED_RETURN` 的节点 id 由所属调用点 range 推出，暂无归属边 |
 | `calledReturnToCalledParam(Mk, CR, CP)` | 反向 | 同上（反向遍历） |
 | `calledReturnToCalledMethod(Mk, CR, CM)` | 反向 | 同上 |
@@ -219,12 +219,12 @@ RETURN a, r, b
 | --- | --- | --- | --- | --- | --- |
 | 时序轴 | **时机（主轴）** | 事件链 `(X)-[:NEXT]->(Y)`（**仅在单个方法体内**） | `(:Method)-[:NEXT]->(方法体首事件)`；分支入口 `(:Condition)-[:NEXT]->(then首事件)` | 函数尾 = 本方法 `return` 向的 NEXT 链尾；**不跨函数**（被调方法的时序在其自身以 `Method` 为链首的 NEXT 链内，跨函数由 `CALLS` 表达） | `codeorder` |
 | 时序轴 | **时机的分形（调用）** | `(:CalledMethod)-[:CALLS]->(:Method)` | `(:Method)-[:NEXT*]->(:CalledMethod)`、`(:Value)-[:ARG_OF]->(:CalledMethod)` | — | `calls`/`callers` |
-| 数据轴 | **数据（主轴）** | `(:Value)-[:FLOWS]->(:Value)` | — | 进出调用：`(:Value)-[:ARG_OF]->(:CalledMethod)`（`RET_OF` 未实现） | `dataflow` |
+| 数据轴 | **数据（主轴）** | `(:Value)-[:FLOWS]->(:Value)` | — | 进出调用：`(:Value)-[:ARG_OF]->(:CalledMethod)`（进）、`(:Value)-[:RET_OF]->(:CalledMethod)`（出） | `dataflow` |
 | 数据轴 | **数据的分形（成员访问/下标）** | `(:Value)-[:REF]->(:CalledMethod\|:Value)`、`(:Value)-[:INDEX]->(:Value{kind:'INDEX'})` | — | — | `nesting` |
 | — | **逻辑** | 条件树：`(:Condition)->(:Condition)`（分支流向由 NEXT 表达；方法级锚点是 `(:Method)-[:NEXT]->(首个运行时事件)`） | `(:Value)-[:CONTROLS]->(:Condition)` | `(:Condition)-[:NEXT*]->(:CalledMethod)` | `controls` |
 
 - **时机（主轴）**：核心 `NEXT` 事件链，链首为该方法的 `Method` 节点（`Method-[:NEXT]->方法体首事件`）；分支入口 `Condition-[:NEXT]->(then首事件)`。**NEXT 只在单个方法体内**——被调方法的时序由它自身以 `Method` 为链首的 NEXT 链表达，调用点经 `CALLS` 关联到被调方法；不建立"被调首事件 / 被调退出→calledReturn"这类跨函数 NEXT（否则从某方法 `Method` 沿 NEXT 可达会漏到别的函数，无法按函数限域）。
-- **时机的分形（调用）**：核心 `CALLS`（CalledMethod→Method）。与逻辑/数据/数据的分形的接缝都在调用点——`NEXT` 从条件进来，实参 `ARG_OF` 让数据进出调用（`RET_OF` 未实现），`REF` 也能引到它。是循环里被多维度汇聚的枢纽。
+- **时机的分形（调用）**：核心 `CALLS`（CalledMethod→Method）。与逻辑/数据/数据的分形的接缝都在调用点——`NEXT` 从条件进来，实参 `ARG_OF` / 返回 `RET_OF` 让数据进出调用，`REF` 也能引到它。是循环里被多维度汇聚的枢纽。
 - **数据（主轴）**：核心 `FLOWS`（Value→Value）；进出调用靠实参/返回槽。
 - **数据的分形（成员访问/下标）**：核心 `REF`（实例→成员/调用）+ `INDEX`（数组访问）。数据在结构层的自相似递归。
 - **逻辑**：内部骨架是**条件树**（分支流向由 NEXT 表达）。入口 `CONTROLS`（守卫值→分支），出口 `NEXT`（分支→触发调用点），据此交接到时序轴的 `CALLS`。`Condition↔Condition` 由 `NEXT` 连接（无 `SUB`/`ELSE` 边），不是 `CALLS`/`CONTROLS`/`FLOWS`。
@@ -272,7 +272,7 @@ RETURN a, r, b
 | `EXTENDS` | `Class→Class` | 继承 | **类型层次/类范围**（super/sub/ancestors/descendants） |
 | `OVERRIDES` | `Method→Method` | 覆写 | **多态**：时序轴/数据轴的 override 变体（`polymorphism` preset） |
 
-> 下表中的 `RETURNS`/`IMPLEMENTS`/`TYPED_BY`/`RET_OF` 在 `GraphModel` 里有常量、但**从未建过边**
+> 下表中的 `RETURNS`/`IMPLEMENTS`/`TYPED_BY` 在 `GraphModel` 里有常量、但**从未建过边**
 > （okhttp 实测计数为 0）——旧项目对应物 `Return`/`instanceOf` 的绑定目前只做到 `HAS_PARAM` 那一层。
 > 引用这些名字的查询会返回空集，不要当成"有边但没数据"。
 >
@@ -281,7 +281,7 @@ RETURN a, r, b
 > | `RETURNS` | `Method→Value`（RETURN） | 方法返回值 → `Return` 字符绑定 |
 > | `IMPLEMENTS` | `Class→Class` | 接口实现（现并入 `EXTENDS`） |
 > | `TYPED_BY` | `Value→Class` | 成员静态类型标注（`instanceOf`） |
-> | `RET_OF` | `Value`（CALLED_RETURN）→`CalledMethod` | 返回使用进出调用点（下节的接头；实际由 `FLOWS` 承载） |
+> | `RET_OF` | `Value`（CALLED_RETURN）→`CalledMethod` | **已实现**：返回值属于哪个调用点（`ARG_OF` 的反向搭档） |
 
 **二、调用点"接头"边（服务于维度交接，本身不成维度）**
 

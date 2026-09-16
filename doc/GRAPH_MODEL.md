@@ -65,7 +65,7 @@ NEO4J_DATABASE  # 可选
 
 | 节点 | 关键属性 | 说明 |
 | --- | --- | --- |
-| `:CalledMethod` | `id, file, line, method` | 一处调用点；同时是 ARG_OF 的枢纽（RET_OF 未实现） |
+| `:CalledMethod` | `id, file, line, method` | 一处调用点；同时是 ARG_OF / RET_OF 的枢纽（数据进出调用的接头） |
 | `:Value`（运行时形态） | `id, kind, name, type, file, line, read, write` | kind 实测 9 种：CALLED_RETURN / CALLED_PARAM / LITERAL / FIELD / LOCAL_VAR / PARAM / RETURN / INDEX / THROW，对应旧 `GlobalInfo.h` 的 KEY_TYPE_*（`DEFAULT_VALUE`/`KEY_WORD_VALUE`/`ENUM_INSTANCE`/`ANONYMOUS_CLASS` 在枚举里但当前索引未产出） |
 | `:Condition` | `id, kind, file, line` | 分支节点，kind 实测仅 4 种：**IF / LOOP / TRY / FINALLY**（`FOR`/`WHILE` 归一到 `LOOP`；**无 CATCH 节点**——catch 体从 TRY 直接经 NEXT 扇出进入，该边带 `exception=<异常类型全名>` 属性区分；也**无 METHOD 根条件节点**） |
 
@@ -92,7 +92,7 @@ NEO4J_DATABASE  # 可选
 | `(:Condition)-[:NEXT]->(else-if 守卫值)` | else-if 链：前个 if 的假路径经 NEXT 进入下个 else-if 的守卫值，不再物化 kind=ELSE 节点/ELSE 边 | Condition→Else→Condition |
 | `(:CalledMethod)-[:CALLS]->(:Method)` | 调用点解析到被调方法声明 | calledMethod→TimingStep→method |
 | `(:Value)-[:ARG_OF]->(:CalledMethod)` | 实参属于哪个调用点 | calledParamToCalledReturn 等 |
-| `(:Value)-[:RET_OF]->(:CalledMethod)` | 返回值使用属于哪个调用点（**未实现**：常量在、边未建，实测 0 条） | 同上 |
+| `(:Value)-[:RET_OF]->(:CalledMethod)` | 返回值属于哪个调用点（`ARG_OF` 的反向搭档：实参进、返回出） | 同上 |
 | `(:Value)-[:FLOWS]->(:Value)` | 数据流（赋值/读写/传参/返回值） | `flow(Mk, S, D)` |
 | `(:Value)-[:CONTROLS]->(:Condition)` | 条件变量守卫哪个分支 | `toConditionValue→conditionItem` |
 | `(:Value)-[:REF]->(:CalledMethod)` | 数据的分形：实例引用访问成员 | Reference |
@@ -239,12 +239,12 @@ Neo4j 只支持二元关系，n 元谓词统一用三种方式降维：
 
 | 原事实 | 元数 | 转换 |
 | --- | --- | --- |
-| `calledParamToCalledReturn(Mk, CP, CR)` | 3 | `CP -[:ARG_OF]-> (calledMethod)`，**`RET_OF` 未实现**（见下）；实参↔返回经 calledMethod 枢纽的两跳 |
-| `calledMethodToCalledReturn(Mk, CM, CR)` | 3 | CM 即 calledMethod；`CR` 与它的归属边 **`RET_OF` 未实现**，目前靠 `(:Value{kind:CALLED_RETURN})` 节点 id 与调用点 range 对应 |
-| `calledReturnToCalledParam` / `calledReturnToCalledMethod` | 3 | 同上，全部隐式化为枢纽的扇入扇出 |
+| `calledParamToCalledReturn(Mk, CP, CR)` | 3 | `CP -[:ARG_OF]-> (calledMethod)`，`CR -[:RET_OF]-> (calledMethod)`；实参↔返回经 calledMethod 枢纽的两跳 |
+| `calledMethodToCalledReturn(Mk, CM, CR)` | 3 | CM 即 calledMethod；`CR` 经 **`RET_OF`** 归属于它（两者 id 同取调用点位置） |
+| `calledReturnToCalledParam` / `calledReturnToCalledMethod` | 3 | 同上，全部隐式化为枢纽的扇入扇出；`RET_OF` 已建 |
 
-> ⚠️ `RET_OF` 在 `GraphModel.REL_RET_OF` 有常量，但 `GraphExtractor` 从未 `addEdge` 过——okhttp 实测 0 条。
-> 引用它的查询会静默返回空集（不是"有边无数据"）。接入返回值使用与调用点的绑定需要补这条边。
+> `RET_OF` 已实现（`GraphExtractor.enterInvocation` 在建 CALLED_RETURN 槽处 addEdge，
+> 与 `callSiteId` 同一位置）。此前只有常量、从未 addEdge，引用它的查询会**静默返回空集**。
 
 **模式 C：拆成"归属边 + 节点属性"**
 
