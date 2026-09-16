@@ -26,11 +26,12 @@ import { mountedProjectList, mountedProjectsHint } from "./mounted-projects";
  */
 /**
  * codeorder / order_* 共用的收尾：从锚点（方法或条件）的 NEXT 链得到 body，补进运算符节点，
- * 再取出 body 内的 NEXT/FLOWS/REF 边。
+ * 再取出 body 内的 NEXT/FLOWS/REF/CONTROLS 边。
  *
  * <p><b>为什么要单独补运算符节点</b>：运算符只入 FLOWS、不入 NEXT（见 GraphExtractor
  * 的 emitOperatorIfAny），所以 `NEXT*` 走不到它们。但它们是操作数汇聚的值枢纽，
- * 不补进来 `responseBuilder` 那条 NEXT 链就会缺一段。
+ * 不补进来 `responseBuilder` 那条 NEXT 链就会缺一段；CONTROLS 的守卫值有一半是运算符
+ * （`==`/`&&`/`||`/`!`），不补进来这些守卫边全部看不到。
  *
  * <p><b>三条去重规则</b>（同一对节点只画最有信息量的一条）：
  * <ul>
@@ -38,11 +39,15 @@ import { mountedProjectList, mountedProjectsHint } from "./mounted-projects";
  *   <li>NEXT 让位 REF —— 同理。实测同一对节点上 NEXT 与 REF 同向（47/47，反向 0），
  *       故用同一条方向判断即可，不会出现"该让的没让、不该让的让了"。
  *   <li>FLOWS 与 REF 可以共存 —— 它们讲的是两件事（值怎么合成 / 哪个实例访问哪个成员）。
+ *   <li>CONTROLS 与 NEXT 也共存 —— 同样讲两件事：NEXT 说"守卫接着被求值"（时序），
+ *       CONTROLS 说"这个值决定走哪个分支"（守卫关系）。实测 1,093 条 CONTROLS 与其
+ *       守卫读→条件 的 NEXT 同向且并存，让位会丢掉"谁守卫了这个分支"这条关键语义。
+ *       CONTROLS 也不与 FLOWS/REF 冲突（它指向 Condition，不是 Value）。
  * </ul>
  *
- * <p>REF 只保留<b>两端都在 body 内</b>的边，不把 body 外的目标节点拉进来：本 preset 的语义是
- * "这个函数体内发生了什么"，`exchange → connection` 的 connection 声明在别的文件里，
- * 拉进来会让图超出方法体。实测这样保留 134/172 条（其余 38 条目标在体外）。
+ * <p>REF / CONTROLS 只保留<b>两端都在 body 内</b>的边，不把 body 外的目标节点拉进来：
+ * 本 preset 的语义是"这个函数体内发生了什么"，`exchange → connection` 的 connection
+ * 声明在别的文件里，拉进来会让图超出方法体。实测 REF 这样保留 134/172 条。
  *
  * @param anchor body 的锚点变量名（codeorder 是 `m`，order_* 是 `c`）
  */
@@ -52,7 +57,7 @@ function bodyTail(anchor: string): string {
     "WHERE o.file CONTAINS $file AND y IN body " +
     `WITH ${anchor}, body, collect(DISTINCT o) AS ops ` +
     `WITH ${anchor}, body + [x IN ops WHERE x IS NOT NULL] AS full ` +
-    "UNWIND full AS a MATCH (a)-[r:NEXT|FLOWS|REF]->(b) " +
+    "UNWIND full AS a MATCH (a)-[r:NEXT|FLOWS|REF|CONTROLS]->(b) " +
     "WHERE b IN full AND NOT (r:NEXT AND ((a)-[:FLOWS]->(b) OR (a)-[:REF]->(b))) RETURN a, r, b"
   );
 }
@@ -109,10 +114,12 @@ const PRESETS: Record<string, { description: string; needsParam: boolean; cypher
   },
   codeorder: {
     description:
-      "时机（时序主轴）+ 数据流 + 成员访问：某方法体内的执行先后、值流向、实例引用（需 param=方法名，" +
-      "从该方法沿 NEXT 走到函数尾）。同一对节点上 NEXT 让位 FLOWS/REF（数据依赖、成员引用都比时序相邻更有信息量）；" +
-      "FLOWS 与 REF 可共存（值怎么合成 / 哪个实例访问哪个成员，是两件事）。" +
-      "REF 只画两端都在方法体内的，不把体外目标拉进来。" +
+      "某方法体内的四个维度：执行先后(NEXT) + 值流向(FLOWS) + 成员访问(REF) + 分支守卫(CONTROLS)" +
+      "（需 param=方法名，从该方法沿 NEXT 走到函数尾）。" +
+      "同一对节点上 NEXT 让位 FLOWS/REF（数据依赖、成员引用都比时序相邻更有信息量）；" +
+      "FLOWS 与 REF 可共存（值怎么合成 / 哪个实例访问哪个成员，是两件事）；" +
+      "CONTROLS 也与 NEXT 共存（守卫关系与时序是两件事，让位就丢了\"谁守卫了这个分支\"）。" +
+      "REF/CONTROLS 只画两端都在方法体内的，不把体外目标拉进来。" +
       "同名方法多时会一起锚定（okhttp 有 18 个 intercept），用 file 收窄到某一个",
     needsParam: true,
     cypher:
@@ -122,8 +129,9 @@ const PRESETS: Record<string, { description: string; needsParam: boolean; cypher
   },
   order_true: {
     description:
-      "某表达式为 true 时的时序 + 数据流 + 成员访问（需 param=表达式名，经 CONTROLS 找条件、走 then 的 NEXT 链）。" +
-      "同一对节点上 NEXT 让位 FLOWS/REF；FLOWS 与 REF 可共存",
+      "某表达式为 true 时的四个维度：执行先后 + 值流向 + 成员访问 + 分支守卫" +
+      "（需 param=表达式名，经 CONTROLS 找条件、走 then 的 NEXT 链）。" +
+      "同一对节点上 NEXT 让位 FLOWS/REF；FLOWS 与 REF、CONTROLS 与 NEXT 各自可共存",
     needsParam: true,
     cypher:
       "MATCH (e:Value {projectId:$project, name:$name}) WHERE e.file CONTAINS $file " +
@@ -133,8 +141,9 @@ const PRESETS: Record<string, { description: string; needsParam: boolean; cypher
   },
   order_false: {
     description:
-      "某表达式为 false 时的时序 + 数据流 + 成员访问（需 param=表达式名，走条件 else 分支的链）。" +
-      "同一对节点上 NEXT 让位 FLOWS/REF；FLOWS 与 REF 可共存",
+      "某表达式为 false 时的四个维度：执行先后 + 值流向 + 成员访问 + 分支守卫" +
+      "（需 param=表达式名，走条件 else 分支的链）。" +
+      "同一对节点上 NEXT 让位 FLOWS/REF；FLOWS 与 REF、CONTROLS 与 NEXT 各自可共存",
     needsParam: true,
     cypher:
       "MATCH (e:Value {projectId:$project, name:$name}) WHERE e.file CONTAINS $file " +
