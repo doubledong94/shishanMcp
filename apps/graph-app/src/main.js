@@ -1018,11 +1018,11 @@ const EDGE_DIM_OF = {
   REF: "dataFractal", REFERENCES: "dataFractal", INDEX: "dataFractal",
   // 逻辑：CONTROLS（守卫）；分支流向一律由 NEXT 表达（无 SUB/ELSE/LEADS_TO/ROOT）
   CONTROLS: "logic",
-  // 调用点接头边：数据进出调用点。归入"数据的分形"族——它们和 REF/INDEX 一样，
-  // 讲的是数据在结构上挂到哪（而非值怎么流动），是数据轴与调用分形轴的交接
-  // （见 doc/SEARCH_GUIDE.md「调用点接头边（本身不成维度）」）。
-  PARAM_TO_METHOD: "dataFractal",
-  METHOD_TO_RETURN: "dataFractal",
+  // 调用点接头边：数据进出调用点（doc/SEARCH_GUIDE.md「调用点接头边（本身不成维度）」）。
+  // 不归 dataFractal（那是 REF/INDEX 的结构纵深，现为黄色），单独用"与 FLOWS 相似
+  // 但能区分"的青绿。
+  PARAM_TO_METHOD: "callJoint",
+  METHOD_TO_RETURN: "callJoint",
 };
 /** 按 sRGB 十六进制构色，跳过 ColorManagement 的 sRGB→线性转换。
  *  本应用边用自定义 ShaderMaterial 原样输出颜色，若 new THREE.Color(0x…) 把它转成线性，
@@ -1035,7 +1035,16 @@ const EDGE_DIM_COLOR = {
   timing:        srgbHex(0x56d3e0), // 青(轻) 时机 NEXT（时序主轴，沿用旧"顺序"的青色）
   timingFractal: srgbHex(0x2f9ec4), // 中青(略重) 时机的分形 CALLS（同族稍深，调用=内嵌时序）
   data:          srgbHex(0x2fb95c), // 翠绿   数据 FLOWS（绿家族，暖绿）
-  dataFractal:   srgbHex(0x2aa47a), // 中绿(略重) 数据的分形 REF/INDEX（结构纵深）
+  dataFractal:   srgbHex(0xcbcb34), // 芥末黄   数据的分形 REF/INDEX（结构纵深）。原 0x2aa47a 中绿，
+                                    // 与 data(翠绿) 同族难分辨；改为黄以便一眼区分"数据流"与"结构纵深"。
+                                    // 色相 159°→60°、饱和度沿用原绿的 59.2%，亮度取原绿 HSL 的 40.4%
+                                    // 再逐档抬到 50%
+  callJoint:     srgbHex(0x29a37e), // 青绿   调用点接头边 PARAM_TO_METHOD / METHOD_TO_RETURN。
+                                    // 曾用"同色相压暗"（135°→#248e47），但深色底上只剩明度差、
+                                    // 肉眼难辨：与 FLOWS 的感知距离只有 ΔE=19.5（CIE76 Lab），
+                                    // 是全表最近的一对。改为**偏色相**——139.6°→162°（往青偏，
+                                    // 仍属绿族），明度保持 L=40% 不压暗，ΔE 拉到 31.4；
+                                    // 与"时机青"(187°) 仍有 ΔE≈34，不混淆
   logic:         srgbHex(0x2f80ed), // 亮蓝   逻辑 条件树（独立，理性蓝）
   other:         srgbHex(0x8b949e), // 中性灰 未纳入
 };
