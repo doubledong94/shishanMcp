@@ -109,6 +109,12 @@ NEO4J_DATABASE  # 可选
 
 节点公共属性：`id`（稳定唯一，`MERGE` 用）、`file`、`line`。声明节点另有 `name`、`type`、`package` 等。数据流/引用的**方向语义由边类型承载**（FLOWS / REF / CONTROLS / CALLS），不再物化中间节点。
 
+> **`line`/`col` 是 0-based（SCIP 原生）**。直写进 Neo4j 的值原样保留 SCIP 的 0-based range，
+> 即**图的 `line=N` 对应源码第 `N+1` 行**；`col`/`colEnd` 也恒为 0-based。
+> 后端 `graph.service.ts` 只在 **API 出口**把 `line` 转 1-based（`:519`、`:803`；入参在 `:453` 反向转），
+> `col` 明确保留 0-based（`:790`）。**用 `cypher-shell` 直查时须自行 `+1`**，否则会误判成"行号错了"。
+> 校验法：源码 `line+1` 行的第 `col` 个字符起应正是该标识符本身。
+
 ## 4. NEXT 时序流(if 分叉与 loop 环)
 
 NEXT 是时序主轴(`粗topic链路`的边)。一个条件(if/loop)处,NEXT 遵循**分叉恒 2 + 汇合按叶终端**的规律;loop 额外形成**环(回边)**。本节只讲 if 与 loop 的 NEXT 流;try/catch/finally 见 4.3、when 见 4.4。**NEXT 只在单个方法体内**——跨函数(call/return)的关联由 `CALLS` 等逻辑边表达,不用 NEXT 穿方法(见 3.2 的 NEXT 行说明)。
@@ -350,6 +356,8 @@ RETURN cm, v1, v2
 ```
 
 ## 9. 待办
+
+> **逐条边的调试进度见 [`EDGE_TODO.md`](EDGE_TODO.md)** —— 哪些边实测验证过、哪些还没调试（含实测计数与已知缺口）。
 
 实现状态：
 
