@@ -29,6 +29,18 @@ function getServerVersion(): string {
       version: getServerVersion(),
       transport: McpTransportType.STREAMABLE_HTTP,
       mcpEndpoint: "/",
+      // 增加请求超时时间到 10 分钟，scip 索引大项目需要较长时间
+      serverMutator: (server) => {
+        // 覆盖默认的请求超时时间（默认 60 秒）
+        const originalRequest = server.server.request.bind(server.server);
+        server.server.request = async (request, options) => {
+          return originalRequest(request, {
+            ...options,
+            timeout: 600_000, // 10 分钟
+          });
+        };
+        return server;
+      },
     }),
     McpPrimitivesModule.forFeature(getServerName()),
     ApiModule,
