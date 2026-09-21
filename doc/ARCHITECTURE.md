@@ -77,7 +77,10 @@ SCIP 是 protobuf 协议，且**每个语言一个 indexer**（Sourcegraph 官�
 | 工具 | 入参 | 行为 |
 | --- | --- | --- |
 | `generate_scip_index` | `project, language` | 调 scip 网关生成索引（fork 聚合期直写 Neo4j） |
-| `query_graph` | `project, cypher` | 对 Neo4j 执行 cypher，把返回的 Path/Node/Relationship 抽成 nodes/edges，**存快照**到 `$DATA/projects/<proj>/<viewId>.json`，返回视图 URL（`http://localhost:18081/#/view/<proj>/<viewId>`） |
+| `query_graph` | `project, cypher/preset, param, file, name` | 对 Neo4j 执行 cypher（或跑预置模板 `preset`），把返回的 Path/Node/Relationship 抽成 nodes/edges，**增量并入当前工作图**并**存快照**到 `$DATA/projects/<proj>/<viewId>.json`，返回视图 URL（`http://localhost:18081/#/view/<proj>/<viewId>`） |
+| `expand_called_method` | `project, id, name` | 从一个调用点（`CalledMethod`）沿 `CALLS` 解析被调 `Method`，用 `codeorder` 查它的函数体，连同一条 `CALLS` 边并入当前工作图（图谱页右键调用点的「展开函数」走它） |
+| `new_graph` | `project, name` | 把当前累积的工作图以 `name` 存为历史快照，然后清空、开新图 |
+| `get_graph_history` | `project` | 返回当前图由哪些搜索叠加而成（`new_graph` 保存的快照亦然） |
 
 前端渲染链路：Agent 调 `query_graph` → 后端执行 cypher → 抽取节点+边 JSON → 存快照 → Three.js 页面按 hash 路由 `#/view/<proj>/<viewId>` 加载快照渲染。
 

@@ -13,7 +13,7 @@
 - `scip-java` fork 里 **生成节点/边** 的逻辑（`GraphExtractor.java`、`GraphModel.java`、`Neo4jGraphWriter.java` 等）；
 - 想要让 `CALLS` / `NEXT` / 依赖占位节点 等关系按新规则重建。
 
-> 纯查询层改动（比如 `query-graph.tool.ts` 的 preset、前端）**不需要**重索引，只重建部署即可。
+> 纯查询层改动（比如 `core/graph/presets.ts` 的 preset、前端）**不需要**重索引，只重建部署即可。
 
 ---
 

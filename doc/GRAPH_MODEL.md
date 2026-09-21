@@ -277,15 +277,23 @@ RETURN m, cm, m2
 > **① 用无界 `-[:NEXT*]->`，不写上界。** 跳数取决于语句里嵌套子表达式的多少，没有稳定上界；
 > 写上界会**静默漏结果**（okhttp 实测：同一方法 `1..40` 只到 40 个节点，无界能到 379 个）。
 >
+> （下列实测数基于 okhttp 全量索引，**2026-09-21 复测**；唯规则③表格里 `RETURN p` 那行是早期实测
+> ——它要返回 1.3 GB，没重跑。重索引后数会变、量级不变。）
+>
 > **② 必须以 `Method` 节点开头，且锚定到具体方法**（`{name:'…'}`，同名多时再加 `file` 过滤）。
 > `Method -[:NEXT]->方法体首事件` 是链首边。**只写 `(m:Method)` 不锚定不够**——全库
-> 14779 个起点 × 各自的可达路径，实测 `count(p)` 跑 **6 分 52 秒未完**。
+> 9817 个起点 × 各自的可达路径，实测 `count(p)` 跑 **6 分 52 秒未完**。
 > 只给 `name` 会同时锚定所有同名方法（okhttp 有 18 个 `intercept`），按规则③返回去重边时
-> 18 个起点合起来 5s / 2032 行，可接受；`RETURN p` 则不然。
+> 18 个起点合起来约 2s / 2040 条边，可接受；`RETURN p` 则不然。
 > 要唯一定位一个函数就补 `file` 子串——`query_graph` 的 `codeorder` / `polymorphism` /
 > `order_*` preset 支持可选的 `file` 输入（恒注入空串，`CONTAINS ''` 恒真即不过滤）：
-> `preset=codeorder, param=intercept, file=CallServerInterceptor` → 380 节点 / 392 边，
-> 全部落在该文件内；不传 `file` 则 18 个 `intercept` 一起锚定（2027 条边）。
+> `preset=codeorder, param=intercept, file=CallServerInterceptor` → 400 节点 / 598 边，
+> 全部落在该文件内；不传 `file` 则 18 个 `intercept` 一起锚定（3191 条边）。
+>
+> **注意本节两组数的口径不同**，别互相印证：`392`（规则③表格里那个）和 `2040` 是**原始 `NEXT`
+> 遍历**折叠出的边数（带 / 不带 `file`）；而 `598` / `3191` 是 codeorder **画出来**的边——它还要再加
+> 运算符节点与 FLOWS/REF/CONTROLS/接头边，所以更多。（`codeorder` 早先只画 `NEXT` 时两者相等，
+> 故「380 / 392」那组老数其实一直是原始 `NEXT` 的数、被记到了 preset 名下。）
 >
 > **③ 别 `count(p)`，也别 `RETURN p` 枚举路径——返回去重边集。**
 >
@@ -300,9 +308,9 @@ RETURN m, cm, m2
 > | `RETURN p` | 10s | 19238 | **1.3 GB** |
 > | `count(p)` | — | — | 要实体化全部路径，最差 |
 > | `count(DISTINCT x)` | 秒回 | 1 | 379（节点数） |
-> | `UNWIND relationships(p) AS r WITH DISTINCT r RETURN a, r, b` | **2s** | **393** | **309 KB** |
+> | `UNWIND relationships(p) AS r WITH DISTINCT r RETURN a, r, b` | **2s** | **392** | **309 KB** |
 >
-> 1.3GB 里 99% 是**重复边的不同走法**；画到图上两者是同一套边（393 条）。
+> 1.3GB 里 99% 是**重复边的不同走法**；画到图上两者是同一套边（392 条）。
 > 所以要点是**把路径折叠成去重边**，不是限制返回行数：
 >
 > ```cypher
