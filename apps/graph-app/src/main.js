@@ -320,7 +320,8 @@ function updateNodeColors() {
 }
 
 // ---------- 自动上色：按流 color-by-flow（对齐旧项目 Ctrl+H flowColor / Ctrl+Alt+H 清除未选中） ----------
-// 流色按"图"记忆（以节点集合的哈希为 key）：同图刷新/重渲染自动恢复，换新图则清空 → 既不丢色也不残留旧色
+// 流色按"图"记忆（存的是着过色的那批节点 id）：同图刷新/重渲染/增量并入都自动恢复，换新图则清空
+// → 既不丢色也不残留旧色。判据见 applyFlowForGraph()。
 const flowColored = new Set(); // 当前带流色的节点集合（对齐旧 nodesObj->colorSpecified）
 const flowColorRatio = new Map(); // nodeId -> 0..1（节点在流向中的纵向位置）
 const FLOW_START = new THREE.Color(0.85, 0.85, 0); // 黄
@@ -330,18 +331,11 @@ const VIEW_TOGGLE_KEY = "shishan-graph-toggles";
 const HISTORY_OPEN_KEY = "shishan-history-open";
 /** 搜索历史面板默认展开；点标题切换并持久化。 */
 let historyOpen = true;
-/** 节点集合的稳定小哈希（与顺序无关），作为"哪张图"的标识。 */
-function graphKey(nodes) {
-  let h = 7;
-  const ids = nodes.map((n) => n.id).sort();
-  for (const s of ids) for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
-  return h.toString(36);
-}
 function readFlowStore() {
   try { return JSON.parse(localStorage.getItem(FLOW_STORE_KEY) || "null") || {}; } catch { return {}; }
 }
-function writeFlowStore(key, coloredIds) {
-  try { localStorage.setItem(FLOW_STORE_KEY, JSON.stringify({ key, colored: coloredIds })); } catch { /* 忽略 */ }
+function writeFlowStore(coloredIds) {
+  try { localStorage.setItem(FLOW_STORE_KEY, JSON.stringify({ colored: coloredIds })); } catch { /* 忽略 */ }
 }
 function persistViewToggles() {
   try { localStorage.setItem(VIEW_TOGGLE_KEY, JSON.stringify({ dim: dimEdgeOn, dot: dotLayoutOn })); } catch { /* 忽略 */ }
@@ -360,17 +354,26 @@ function restoreViewToggles() {
     }
   } catch { persistViewToggles(); }
 }
-/** 按当前图应用/恢复流色；换新图（key 变）则清空。 */
+/**
+ * 按当前图应用/恢复流色；换新图则清空。
+ *
+ * 判据**不能**用"节点集合是否完全一致"（原先用节点集合哈希）。当前工作图是**增量**的：
+ * query_graph 再查询、向选中节点扩展、右键展开函数，都是把新节点并进同一张图 —— 节点集合一变，
+ * 严格相等就判成"换了张图"，于是每展开一次函数，用户先前按流上好的色全被清掉。
+ *
+ * 改用"上次着色的那些节点是否都还在当前图里"：
+ *  - 都在（图只是长大，或同图重渲染/刷新）→ 沿着色，新增节点留灰，由用户自己再决定是否上色；
+ *  - 有任何一个不见了（new_graph 清空后重搜、加载了别的视图）→ 视为换图并清空，防止残留旧色。
+ */
 function applyFlowForGraph() {
-  const key = graphKey(state.nodes);
   const stored = readFlowStore();
-  const ratioKey = stored.key === key;
+  const colored = Array.isArray(stored.colored) ? stored.colored : [];
+  const present = new Set(state.nodes.map((n) => n.id));
   flowColored.clear();
-  if (ratioKey && Array.isArray(stored.colored)) {
-    for (const id of stored.colored) flowColored.add(id);
+  if (colored.length && colored.every((id) => present.has(id))) {
+    for (const id of colored) flowColored.add(id);
     computeFlowColors();
   }
-  // key 不同（换新图）→ 不清存也不上色；key 相同才恢复
 }
 
 const _FLOW_WHITE = new THREE.Color(1, 1, 1);
@@ -446,7 +449,7 @@ function enableFlowColor() {
   computeFlowColors();
   // 对齐旧 flowColor()：默认给所有节点上流色（不覆盖已有指定颜色——当前仅流色，故全加）
   for (const n of state.nodes) flowColored.add(n.id);
-  writeFlowStore(graphKey(state.nodes), [...flowColored]); // 按当前图记住着色
+  writeFlowStore([...flowColored]); // 按当前图记住着色
   // 自动上色会让"节点与边统一流色"，关掉维度着色，避免边仍按维度分色。
   if (dimEdgeOn) { dimEdgeOn = false; persistViewToggles(); }
   const st = document.getElementById("dim-state");
@@ -458,7 +461,7 @@ function clearUnselectedColor() {
   for (const id of [...flowColored]) {
     if (!selectedIds.has(id)) flowColored.delete(id);
   }
-  writeFlowStore(graphKey(state.nodes), [...flowColored]);
+  writeFlowStore([...flowColored]);
   applyHighlights();
 }
 
@@ -2094,9 +2097,12 @@ function animateFlowEdge(idx, sourceId, targetId, cascade, backward, path) {
 
 // ---------- 节点右键浮动菜单 + 查看源码 ----------
 const ctxMenu = document.getElementById("context-menu");
+/** 只对 CalledMethod 生效的菜单项：调用点沿 CALLS 才有被调方法可展开。 */
+const ctxExpandCalledEl = ctxMenu.querySelector('[data-act="expand-called"]');
 let ctxMenuNodeId = null;
 function openContextMenu(clientX, clientY, nodeId) {
   ctxMenuNodeId = nodeId;
+  ctxExpandCalledEl.hidden = nodeKind(nodeId) !== "CalledMethod";
   ctxMenu.hidden = false;
   // 修正菜单位置，避免超出视口
   const r = ctxMenu.getBoundingClientRect();
@@ -2114,6 +2120,8 @@ ctxMenu.addEventListener("click", (e) => {
   if (!id || !act) return;
   if (act === "flow" || act === "flow-back") {
     toggleGlobalFlow(act === "flow-back"); // 所有边整体流光开/关
+  } else if (act === "expand-called") {
+    expandCalledMethod(id);
   } else if (act === "source") {
     viewSourceForNode(id);
   } else if (act === "copy-hover") {
@@ -2657,6 +2665,39 @@ async function expand() {
     renderGraph(view, activeId); // 增量并入，新节点在主选中节点附近生成并沉降
   } catch (err) {
     errorEl.textContent = `扩展失败: ${err instanceof Error ? err.message : err}`;
+  }
+}
+
+/**
+ * 展开一个调用点：沿 CALLS 找被调方法，用 codeorder 查它的函数体，叠加到当前图。
+ * 后端（expand_called_method）已把结果并入 current，这里再 renderGraph 一次是为了立刻出图
+ * 而不等 2 秒轮询；新节点以被右键的那个调用点为种子撒点，落在它附近。
+ */
+async function expandCalledMethod(id) {
+  const project = projectSel.value;
+  if (!project) { errorEl.textContent = "未选项目，无法展开函数"; return; }
+  const node = state.nodes.find((n) => n.id === id);
+  // 后端按稳定 id（Neo4j 的 id 属性）匹配；node-<identity> 每次重建索引都变，不能用来查。
+  // 重索引前存下的旧快照里的节点没有 stableId，直接提示重查，免得报出难懂的空结果。
+  const stableId = node && node.stableId;
+  if (!stableId) {
+    errorEl.textContent = "该节点缺少稳定 id（可能来自重索引前的旧快照），请重新查询后再试";
+    return;
+  }
+  errorEl.textContent = "";
+  const label = node.label || node.name || stableId;
+  try {
+    const res = await fetch("/api/run/expand_called_method", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ project, id: stableId, name: `展开函数 ${label}` }),
+    });
+    if (!res.ok) throw new Error(`${res.status}: ${(await res.text()).slice(0, 200)}`);
+    const out = await res.json();
+    if (out && out.error) { errorEl.textContent = out.error; return; }
+    if (out && out.view) renderGraph(out.view, id);
+  } catch (err) {
+    errorEl.textContent = `展开函数失败: ${err instanceof Error ? err.message : err}`;
   }
 }
 

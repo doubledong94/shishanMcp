@@ -154,6 +154,9 @@
         display: block; width: 100%; background: none; border: none; color: #c9d1d9;
         padding: 7px 10px; text-align: left; font-size: 13px; cursor: pointer; border-radius: 4px;
       }
+      /* [hidden] 必须显式写：上面的 .ctx-item{display:block} 是作者样式，
+         会盖掉 UA 样式表里的 [hidden]{display:none}，否则隐藏的菜单项照样显示。 */
+      .ctx-item[hidden] { display: none; }
       .ctx-item:hover { background: #1f6feb; color: #fff; }
       .ctx-item .ctx-desc { color: #8b949e; font-size: 11px; margin-left: 6px; }
       .ctx-item:hover .ctx-desc { color: #e6edf3; }
@@ -392,6 +395,8 @@
     <div id="context-menu" class="context-menu" hidden>
       <button class="ctx-item" data-act="flow">边流光动画<span class="ctx-desc">变换移动暗带</span></button>
       <button class="ctx-item" data-act="flow-back">反向流光<span class="ctx-desc">Shift</span></button>
+      <!-- 仅对 CalledMethod 节点显示（openContextMenu 里按节点类型开/关） -->
+      <button class="ctx-item" data-act="expand-called" hidden>展开函数<span class="ctx-desc">查被调方法的函数体</span></button>
       <button class="ctx-item" data-act="source">查看源码<span class="ctx-desc">在代码查看器打开</span></button>
       <button class="ctx-item" data-act="copy-hover">复制 hover 内容<span class="ctx-desc">复制节点信息到剪贴板</span></button>
     </div>

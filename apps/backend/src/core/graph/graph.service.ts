@@ -6,6 +6,7 @@ import { DataStoreService } from "../data-store.service";
 import { GraphConfig } from "./graph-config";
 import { ScipClientService } from "./scip-client.service";
 import { Neo4jService } from "./neo4j.service";
+import { PRESETS } from "./presets";
 
 export interface GenerateResult {
   project: string;
@@ -116,9 +117,10 @@ export interface QueryResult {
 /**
  * 代码图谱编排：SCIP 精确符号图 → Neo4j 图数据库（scip-java fork 聚合期直写）。
  *
- * 两个工具方法（供 MCP 工具与 REST 复用）：
+ * 三个工具方法（供 MCP 工具与 REST 复用）：
  *  - generateScipIndex: 调 scip 网关生成索引（fork 聚合期直写 Neo4j）
  *  - queryGraph: 执行 cypher，把路径图结果存快照、可被图谱页渲染
+ *  - expandCalledMethod: 从调用点(CalledMethod)沿 CALLS 找到被调方法，查它的函数体
  */
 @Injectable()
 export class GraphService {
@@ -201,6 +203,58 @@ export class GraphService {
         history,
       },
     };
+  }
+
+  // ---------- 工具 3：从调用点展开被调函数的函数体 ----------
+
+  /**
+   * 把一个调用点（CalledMethod 节点）展开成它调用的那个方法的函数体。
+   *
+   * 分两步，顺序不能换：先沿 CALLS 解析出被调 Method 声明（取它的 name + file），
+   * 再用 codeorder 模板查该方法的函数体。必须两步的原因是 codeorder 靠 `{name, file}` 锚定，
+   * 而这两个值只有 Method 声明节点上才有——调用点节点自己的 `file` 是**调用发生的位置**，
+   * 不是被调方法的声明位置，直接拿去锚定会查错方法（或查空）。
+   *
+   * 结尾用 `UNION` 补一条 CALLS 边（cm→m），把叠加进来的函数体显式接回那个调用点，
+   * 否则展开出来的是一片与调用点之间没有实边相连的孤岛。被调的 Method 节点**本来就在**
+   * codeorder 结果里（`m-[:NEXT]->方法体首事件` 是返回边之一，`m` 会作为 `a` 出现），
+   * 所以这条 UNION 只补边、不引入新节点。
+   */
+  async expandCalledMethod(
+    project: string,
+    calledMethodId: string,
+    name?: string,
+  ): Promise<QueryResult | { error: string }> {
+    this.assertProject(project);
+    const records = (await this.neo4j.run(
+      "MATCH (cm:CalledMethod {projectId:$project, id:$id})-[:CALLS]->(m:Method {projectId:$project}) " +
+        "RETURN m.name AS name, m.file AS file LIMIT 1",
+      { project, id: calledMethodId },
+      "read",
+    )) as Array<{ get: (k: string) => unknown }>;
+    const rec = records[0];
+    const methodName = rec ? String(rec.get("name") ?? "") : "";
+    if (!methodName) {
+      // 全库有 34 个调用点没有 CALLS 出边（`local N` 链式调用的中间行等），是已知缺口而非故障。
+      return { error: `该调用点未解析到被调方法（无 CALLS 出边）：${calledMethodId}` };
+    }
+    const file = String(rec.get("file") ?? "");
+    // CALLS 是 1:1（58843 个调用点 / 58843 条边），所以上面 LIMIT 1 不会漏分支。
+    // UNION 两侧列名必须一致，故右侧 `AS a/r/b` 对齐 codeorder 结尾的 `RETURN a, r, b`。
+    const cypher =
+      PRESETS.codeorder.cypher +
+      "\nUNION\n" +
+      "MATCH (cm:CalledMethod {projectId:$project, id:$srcId})-[cr:CALLS]->(m:Method {projectId:$project}) " +
+      "RETURN cm AS a, cr AS r, m AS b";
+    // file 传的是 Method 声明节点上的项目相对路径，codeorder 的 `m.file CONTAINS $file` 等价于精确匹配，
+    // 同名方法（okhttp 有 18 个 intercept）在这里天然被分开了。
+    return this.queryGraph(
+      project,
+      cypher,
+      { project, name: methodName, file, srcId: calledMethodId },
+      "codeorder",
+      name || `展开函数 ${methodName}`,
+    );
   }
 
   // ---------- 当前工作图（增量并入 + 命名保存 / 开新图） ----------
