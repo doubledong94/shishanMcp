@@ -6,7 +6,7 @@ import { DataStoreService } from "../data-store.service";
 import { GraphConfig } from "./graph-config";
 import { ScipClientService } from "./scip-client.service";
 import { Neo4jService } from "./neo4j.service";
-import { PRESETS } from "./presets";
+import { codeorderByMethodIdCypher } from "./presets";
 
 export interface GenerateResult {
   project: string;
@@ -228,30 +228,33 @@ export class GraphService {
     this.assertProject(project);
     const records = (await this.neo4j.run(
       "MATCH (cm:CalledMethod {projectId:$project, id:$id})-[:CALLS]->(m:Method {projectId:$project}) " +
-        "RETURN m.name AS name, m.file AS file LIMIT 1",
+        "RETURN m.name AS name, m.file AS file, m.id AS mid LIMIT 1",
       { project, id: calledMethodId },
       "read",
     )) as Array<{ get: (k: string) => unknown }>;
     const rec = records[0];
     const methodName = rec ? String(rec.get("name") ?? "") : "";
-    if (!methodName) {
+    const methodId = rec ? String(rec.get("mid") ?? "") : "";
+    if (!methodName || !methodId) {
       // 全库有 34 个调用点没有 CALLS 出边（`local N` 链式调用的中间行等），是已知缺口而非故障。
       return { error: `该调用点未解析到被调方法（无 CALLS 出边）：${calledMethodId}` };
     }
     const file = String(rec.get("file") ?? "");
     // CALLS 是 1:1（58843 个调用点 / 58843 条边），所以上面 LIMIT 1 不会漏分支。
+    // 按 Method 的 **id** 锚定而不用 `{name, file}`：同一个文件里常有多个同名方法
+    // （okhttp Response.kt 里 Response.body 与 Response.Builder.body 都叫 body），
+    // 用 name 会把它们一起锚定，展开出一块与调用点没有任何边相连的同名方法孤岛。
+    // file 仍要传：bodyTail 里筛运算符节点用它。
     // UNION 两侧列名必须一致，故右侧 `AS a/r/b` 对齐 codeorder 结尾的 `RETURN a, r, b`。
     const cypher =
-      PRESETS.codeorder.cypher +
+      codeorderByMethodIdCypher() +
       "\nUNION\n" +
       "MATCH (cm:CalledMethod {projectId:$project, id:$srcId})-[cr:CALLS]->(m:Method {projectId:$project}) " +
       "RETURN cm AS a, cr AS r, m AS b";
-    // file 传的是 Method 声明节点上的项目相对路径，codeorder 的 `m.file CONTAINS $file` 等价于精确匹配，
-    // 同名方法（okhttp 有 18 个 intercept）在这里天然被分开了。
     return this.queryGraph(
       project,
       cypher,
-      { project, name: methodName, file, srcId: calledMethodId },
+      { project, file, methodId, srcId: calledMethodId },
       "codeorder",
       name || `展开函数 ${methodName}`,
     );

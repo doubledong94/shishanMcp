@@ -161,3 +161,24 @@ export const PRESETS: Record<string, { description: string; needsParam: boolean;
 };
 
 export const PRESET_NAMES = Object.keys(PRESETS) as [string, ...string[]];
+
+/**
+ * {@code codeorder} 的「按稳定 id 锚定」变体 —— 供 `expand_called_method`（调用点右键「展开函数」）用。
+ *
+ * <p><b>为什么不能用 `PRESETS.codeorder` 那套 `{name, file}`</b>：`name` **不唯一**。同一个文件里
+ * 常有多个同名方法 —— 实测 okhttp `Response.kt` 里 `Response.body` 与 `Response.Builder.body`
+ * 都叫 `body`、且都在同一个文件里，`{name, file}` 会把它们**一起**锚定。展开出来的图于是混进了
+ * 一个根本没人调用的同名方法：它与调用点之间没有任何边，在图上就是一块**不连通的孤岛**
+ * （用户报的"展开后有不连通的姐弟"）。
+ *
+ * <p>被调方法的 `id`（Neo4j 的 `id` 属性 = `project::symbol`）是唯一的，按它锚定才是精确的那一个。
+ *
+ * <p>`$file` 仍要传：{@link bodyTail} 里筛运算符节点要用（`o.file CONTAINS $file`）。
+ */
+export function codeorderByMethodIdCypher(): string {
+  return (
+    "MATCH (m:Method {projectId:$project, id:$methodId}) " +
+    "MATCH (m)-[:NEXT*]->(v {projectId:$project}) WITH m, collect(DISTINCT v) + m AS body " +
+    bodyTail("m")
+  );
+}
