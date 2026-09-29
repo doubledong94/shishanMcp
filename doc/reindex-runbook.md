@@ -116,7 +116,42 @@ MATCH (:CalledMethod)-[:CALLS]->(:Method) RETURN count(*)                -- 应�
 
 ---
 
+## 4.1 聚合必须可复现（并行 ≠ 结果漂移）
+
+**同一份源码反复重索引，图必须逐条一致。** 这是硬要求：否则"某条边少了"永远分不清是代码问题还是抖动。
+
+- **坑（2026-09-29 修）**：`ScipAggregator` 的并行段（`--parallel` 是默认，见两个命令的
+  `.flag("--no-parallel", default = true)`）曾在多线程里直接写共享状态——`collectedSymbols` /
+  `sourceByPath`（普通 HashMap）、`mergedTrees`、以及 **`ScipWriter` 的输出流**。
+  后果：① `index.scip` 可能字节交错损坏；② 同一符号在多个分片各带一份 `SymbolInformation`
+  （Kotlin expect/actual，okhttp 是多平台工程）时"谁留下"随线程调度变化 → `relationships` 变化 →
+  **EXTENDS 262↔226、OVERRIDES 942↔861 地漂**（节点总数与语法树推导的边却完全不变，很有迷惑性）；
+  ③ `sourceByPath` 丢写 → 该文件字面量节点静默退化。
+- **修法**：并行段改成**纯产出**（`readShardsPure` → `IntStream.range(...).mapToObj(...)`，
+  每分片返回一个 `ShardOutput`，不碰任何共享状态），之后**按分片顺序顺序折叠**进 writer / 符号表 /
+  源码表。于是 `--parallel` 与 `--no-parallel` **等价**。
+- **验收**（改完聚合器应跑一遍）：
+  ```sh
+  # ① 连跑 3 次重索引，12 种边的条数应逐次完全一致
+  # ② A/B 并行 vs 顺序，index.scip 应字节一致
+  docker exec -e SCIP_JAVA_OPTS=-Xmx6g -e SCIP_PROJECT_NAME=okhttp-ab shishan-scip \
+    scip-java aggregate --targetroot <TROOT> --output /tmp/ab-a.scip --parallel
+  docker exec -e SCIP_JAVA_OPTS=-Xmx6g -e SCIP_PROJECT_NAME=okhttp-ab shishan-scip \
+    scip-java aggregate --targetroot <TROOT> --output /tmp/ab-b.scip --no-parallel
+  docker exec shishan-scip sh -c 'sha256sum /tmp/ab-a.scip /tmp/ab-b.scip'   # 应相同
+  ```
+  > `SCIP_PROJECT_NAME` 换成临时名，避免 A/B 覆盖线上 `okhttp` 图；跑完记得
+  > `MATCH (n {projectId:'okhttp-ab'}) ... DETACH DELETE`（**分块删**，一次删 30 万节点会撞
+  > Neo4j 事务内存）。
+  > 也**别**把 `NEO4J_URI` 清空来做 A/B：graph 模式关掉会走"物化全部 .tree"那条路，直接 OOM。
+
 ## 5. 几个有用的事实
+
+- **局部符号 `local N` 的复合键是 `文件 + \u0000 + 符号`**（`ScipSymbols.localKey`）。分隔符是**字面 NUL**——
+  在很多编辑器里显示成空格，手拼极易写错；写错不会报错，只会让局部类/方法的展示名**静默退化成裸数字**
+  （`<anonymous>`→`18`、`peek`→`20`），而结构与条数完全不变。写入方 `ScipAggregator.readShard` 与
+  查询方 `GraphExtractor.infoOf` **都必须调 `ScipSymbols.localKey`**，不要再手拼。
+  自检：`MATCH (m:Method) WHERE m.id CONTAINS '::local' AND m.name =~ '[0-9]+' RETURN count(m)` 应为 0。
 
 - 数据目录：`~/.shishan-data`（可用 `--data` 覆盖）；Neo4j 数据持久在 `$DATA/neo4j`，容器回收不丢。
 - 挂载项目（okhttp）只读、同路径；scip 网关注入 `NEO4J_URI/USER/PASSWORD`，fork 聚合期直写 Neo4j。

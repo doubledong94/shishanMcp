@@ -1051,7 +1051,7 @@ const EDGE_DIM_COLOR = {
   logic:         srgbHex(0x2f80ed), // 亮蓝   逻辑 条件树（独立，理性蓝）
   other:         srgbHex(0x8b949e), // 中性灰 未纳入
 };
-/** 边 label → 维度颜色；未纳入各轴维度的（DECLARES/HAS_PARAM/RETURNS…）归为灰。 */
+/** 边 label → 维度颜色；未纳入各轴维度的（DEFINES/HAS_PARAM/RETURNS…）归为灰。 */
 function edgeDimColorFor(label, out) {
   const dim = EDGE_DIM_OF[label] || "other";
   out.copy(EDGE_DIM_COLOR[dim]);

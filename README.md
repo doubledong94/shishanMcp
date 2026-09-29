@@ -184,17 +184,24 @@ claude mcp add --transport http shishan http://127.0.0.1:13000
 
 ## 代码图谱（可选）
 
-部署时带上 Neo4j 密码（见上"2A. 部署"）后，AI 会额外看到 2 个图谱工具：
+部署时带上 Neo4j 密码（见上"2A. 部署"）后，AI 会额外看到 5 个图谱工具：
 
 - `generate_scip_index(project, language)`：调 scip 索引网关生成索引；用 `--scip-java` fork 部署时**索引即入库**（聚合期直写 Neo4j），返回 graph 统计
-- `query_graph(project, preset?, cypher?)`：对 Neo4j 执行 cypher，把结果渲染到 :18081 三维图页面（可传 preset 用预置模板，或自定义）
+- `query_graph(project, preset?, cypher?, param, file)`：对 Neo4j 执行 cypher（或跑 `preset` 预置模板），把结果渲染到 :18081 三维图页面
+- `expand_called_method(project, id, name?)`：从一个调用点展开被调函数的函数体（图谱页调用点右键的「展开函数」走它）
+- `new_graph(project, name)`：把当前工作图存成历史快照，然后清空、开新图
+- `get_graph_history(project)`：查看当前工作图由哪些搜索叠加而成
 
 典型工作流（Agent 自主编排）：
 
 ```
-generate_scip_index("proj-a", "java")   // fork 直写 Neo4j
-  → query_graph("proj-a", preset="calls")   // 或自定义 cypher
+generate_scip_index("proj-a", "java")        // fork 直写 Neo4j
+  → query_graph("proj-a", preset="codeorder", param="intercept", file="CallServerInterceptor")
 ```
+
+> 预置模板见 `doc/SEARCH_GUIDE.md`：`codeorder`（某方法体内四个维度 + 匿名内部类）、`order_true` /
+> `order_false`、`dataflow`、`nesting`、`intersection`、`types` / `ancestors` / `descendants`、`inPackage`。
+> 凡按"名字"锚定的模板都支持传 `file` 收窄（同名值/方法常不唯一，不收窄会把无关节点一并拉进图）。
 
 - 数据持久化在宿主机 `$DATA_DIR/neo4j`（bind mount），重建/回收容器不丢。
 - scip 按语言装 indexer：TS/JS、Python、Java/Scala/Kotlin（需 Gradle/Maven 项目）、C/C++（需 `compile_commands.json`）。没有对应 indexer 的语言，符号图为空。
@@ -205,7 +212,7 @@ generate_scip_index("proj-a", "java")   // fork 直写 Neo4j
 在 :18081 图上**右键（桌面）或长按（触屏）任一节点**弹出浮动菜单：
 
 - **展开函数**（**只对调用点 `CalledMethod` 节点显示**）：沿 `CALLS` 边解析出被调用的那个方法，
-  用 `codeorder` 查它的函数体（执行先后 + 值流向 + 成员访问 + 分支守卫 + 调用点接头），
+  用 `codeorder` 查它的函数体（执行先后 + 值流向 + 成员访问 + 分支守卫 + 调用点接头 + 匿名内部类），
   连同一条 `CALLS` 边叠加到当前图上——从「这里调了谁」一步走到「这个函数里面长什么样」。
   少数调用点没有 `CALLS` 出边（链式调用的中间行），会提示未解析到被调方法。
 - **边流光动画 / 反向流光**：所有边整体流光开关。

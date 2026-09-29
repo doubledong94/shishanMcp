@@ -73,21 +73,36 @@ NEO4J_DATABASE  # 可选
 
 **声明层关系：**
 
+**声明层关系：**
+
 | 关系 | 说明 | 旧 prolog |
 | --- | --- | --- |
-| `(:Class)-[:DECLARES]->(:Method\|:Field)` | 类声明成员 | `method / constructor / field / parameter / return` |
-| `(:Method)-[:HAS_PARAM]->(:Value)` | 方法形参 | `parameter(M, P)` |
+| `(:Class)-[:DEFINES]->(:Method\|:Field)` | 类定义成员（原 `DECLARES`，2026-09 更名） | `method / constructor / field / parameter / return` |
+| `(:Class)-[:DEFINES]->(:Class)` | 嵌套类定义（外层类 → 内层类） | — |
+| `(:Method)-[:HAS_PARAM]->(:Value)` | 方法形参（**含局部方法的形参**） | `parameter(M, P)` |
 | `(:Method)-[:RETURNS]->(:Value)` | 方法返回值（**未实现**：常量在、边未建，实测 0 条） | `return(M, R)` |
-| `(:Class)-[:EXTENDS]->(:Class)` | 继承（`IMPLEMENTS` **未实现**，接口实现并入 `EXTENDS`） | `subType(T, S)` |
-| `(:Method)-[:OVERRIDES]->(:Method)` | 覆写 | `override(K, S)` |
+| `(:Class)-[:EXTENDS]->(:Class)` | 继承（`IMPLEMENTS` **未实现**，接口实现并入 `EXTENDS`）。**含局部类**：匿名对象/局部类的基类型从**语法树**取（SCIP 对 `local N` 符号不产 relationships），只连本项目内已建的类节点 | `subType(T, S)` |
+| `(:Method)-[:OVERRIDES]->(:Method)` | 覆写（**局部方法不建**：SCIP 无 relationships；可用 `Class-[:DEFINES]->Method` + `Class-[:EXTENDS]->Base` + `Base-[:DEFINES]->BaseMethod` 三跳推导） | `override(K, S)` |
 | ~~`(:Method)-[:USES]->(:Method\|:Field)`~~ | ~~方法使用了谁（类范围 usedBy 搜索用）~~ | ~~`methodUseMethod / methodUseField`~~（已决定不实现） |
 | `(:Value)-[:TYPED_BY]->(:Class)` | 成员类型（**未实现**：改用声明属性 `Field.type`/`Value.kind`） | `instanceOf(K, T)` |
+
+> **匿名内部类 / 局部类（`local N`）的接线**（2026-09-29 落地）：
+> 这类节点此前在图里是**整棵孤岛**。现在由 `Value -DEFINES-> Class` + `Class -DEFINES-> 成员`
+> + `Class -EXTENDS-> 基类型` + 局部方法的 `Method -NEXT-> 体首` 接进图。
+> 其中 **`(:Value)-[:DEFINES]->(:Class)`（对象字面量站点 → 它定义的匿名类）是"从搜到的函数走进匿名类"
+> 的唯一入口**——那个匿名实例的 Value 节点本身就在外层函数的 NEXT 链上。
+>
+> **刻意不建**"外层容器 → 局部类型"的归属边 `(:Method\|:Class)-[:DEFINES]->(:Class)`：它会让同一个边名
+> 既表示"容器→成员"又表示"容器→被定义者"，方向语义翻转、光看边类型读不出来。**代价**：**具名局部类**
+> （`class X : Y {…}`，没有对象字面量 → 没有站点边）因此不可达（okhttp 实测 5 个类 / 8 个成员方法），
+> 见 `EDGE_TODO.md` §2.4。
 
 **运行时层关系：**
 
 | 关系 | 说明 | 旧 prolog |
 | --- | --- | --- |
-| `(:Method)-[:NEXT]->(方法体首事件)` | 方法入口：`Method` 即该方法时序链的首节点，直连其方法体第一个运行时事件（**无 ROOT 边、无 kind=METHOD 的根条件节点**） | 方法 conditionItem |
+| `(:Value)-[:DEFINES]->(:Class)` | 对象字面量站点（`#L:C:LITERAL`，即 `object : X {…}` 的实例）→ 它定义的匿名类。**跨层**：运行层 → 声明层，与 `CALLS` 同构 | — |
+| `(:Method)-[:NEXT]->(方法体首事件)` | 方法入口：`Method` 即该方法时序链的首节点，直连其方法体第一个运行时事件（**无 ROOT 边、无 kind=METHOD 的根条件节点**）。**局部方法也有此边**（`local N` 的 declId 带 file 故唯一） | 方法 conditionItem |
 | `(:Condition)-[:NEXT]->(嵌套条件首事件)` | 分支嵌套：嵌套 if/循环在分支内，经分支的 NEXT 链进入（无 SUB 边） | super→sub condition |
 | `(:Condition)-[:NEXT]->(else-if 守卫值)` | else-if 链：前个 if 的假路径经 NEXT 进入下个 else-if 的守卫值，不再物化 kind=ELSE 节点/ELSE 边 | Condition→Else→Condition |
 | `(:CalledMethod)-[:CALLS]->(:Method)` | 调用点解析到被调方法声明 | calledMethod→TimingStep→method |
@@ -379,6 +394,13 @@ RETURN cm, v1, v2
 - [x] fork：写穿引用（reversedRef：`obj.field = x` 写目标为字段、基对象记已写）+ 字段访问 REF 边（数据的分形）
 - [x] fork：跨方法传参绑定（calledParam→callee 形参，按声明序）、跨方法返回值绑定（callee return→calledReturn）
 - [x] fork：数组访问 INDEX 边（`arr[i]`）；引用方向细化（markUnreadReturn：写目标 REF 翻转 member→base）
+- [x] fork：**匿名内部类 / 局部类（`local N`）接线**（2026-09-29）——局部方法的
+  `Method→NEXT→体首`（678/733，其余为空体）与 `CalledMethod→CALLS→Method`（17/34，其余目标不是方法）；
+  局部类的归属与基类型从**语法树**取（`scopeStack` 作用域栈；SCIP 对 local 不产 relationships、
+  `ownerOf("local N")` 恒为 null），发 `Value-DEFINES->Class`、`Class-DEFINES->成员`、
+  `Class-EXTENDS->基类型`、局部方法的 `HAS_PARAM`（**不发**"外层容器→局部类型"的归属边，见 §3.2 注）。
+  **`DECLARES` 全库更名为 `DEFINES`**（`REL_DEFINES`，两种形态共用，见 §3.2）
+- [x] preset：`codeorder` / `order_*` 的 `bodyTail()` **扩一跳**带出匿名内部类（见 `SEARCH_GUIDE.md` §11.4）
 - [x] 全量验证：`deploy-graph.sh --scip-java <fork> okhttp` 端到端（网关 → fork → Neo4j 直写 → backend 工具可用）
 
 > 说明：`import_to_graph` 及旧 `buildImportStatements`/`getIndexJson` 导入链已删除（fork 直写是唯一入库路径）；`/api/index/:project` 网关端点保留，供调试控制台的 SCIP 索引查看器使用。

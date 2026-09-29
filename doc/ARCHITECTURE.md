@@ -21,7 +21,7 @@
 │  │   NestJS MCP backend          │   :18081 Three.js 图谱页  │
 │  │  + nginx                      │                          │
 │  │  工具: generate_scip_index / query_graph                  │
-│  │        query_graph                                       │
+│  │        expand_called_method / new_graph / get_graph_history│
 │  │  挂载: <项目>:<同路径>:ro  $DATA:同路径(可写)             │
 │  └───┬──────────┬────────────┬──┘                          │
 │      │HTTP(8000)│Bolt(7687)  │                             │
@@ -86,24 +86,39 @@ SCIP 是 protobuf 协议，且**每个语言一个 indexer**（Sourcegraph 官�
 
 ## 5. Neo4j 图模型
 
+> **权威定义在 [`GRAPH_MODEL.md`](GRAPH_MODEL.md)**（节点类型 / 关系 / 不变量 / 已实测计数），
+> 这里只给最小轮廓。注意：**图数据由 scip-java fork 在聚合期直写**，不再走
+> `Project/File/Symbol/REFERENCES` 那套旧的 SCIP-JSON 导入模型（已删除）。
+
+节点（`projectId` / `id` / `file` / `line` 公共属性，`line`·`col` 是 SCIP 原生 **0-based**）：
+
+| 层 | 节点 | 说明 |
+| --- | --- | --- |
+| 声明层 | `Class` / `Method` / `Field` / `Value`(声明) | 代码结构本身 |
+| 运行时层 | `CalledMethod` / `Value`(9 种 kind) / `Condition`(IF/LOOP/TRY/FINALLY) | 每次调用/读写/分支各一个 |
+
+关系（两条主轴 + 各自分形 + 逻辑 + 调用接头 + 结构）：
+
 ```
-(:Project)-[:CONTAINS]->(:File)
-(:File)-[:HAS_SYMBOL]->(:Symbol)         -- scip 符号声明所在文件
-(:Symbol)-[:REFERENCES]->(:Symbol)       -- scip 精确引用（跨文件）
+时序 NEXT        : Method|Value|CalledMethod|Condition → …   （只在单个方法体内）
+数据 FLOWS       : Value → Value                            （值怎么合成）
+分形 CALLS / REF : CalledMethod→Method / Value→Value        （调用 / 成员访问）
+逻辑 CONTROLS    : Value → Condition                        （谁守卫了这个分支）
+接头 PARAM_TO_METHOD / METHOD_TO_RETURN                     （数据进出调用点）
+结构 DEFINES     : Class→成员、Value→匿名类                  （定义；原名 DECLARES）
+     EXTENDS / OVERRIDES / HAS_PARAM                        （继承 / 覆写 / 形参）
 ```
 
-- `File`：`{path, filePath, projectId}`（普通索引 path+projectId，**不用 NODE KEY——Community 版不支持**）
-- `Symbol`：`{name, signature, filePath, projectId}`（SCIP symbol，带语义层级）
-
-典型查询（Agent 提供 cypher）：
+典型查询（务必锚定，否则变长展开会挂住；理由见 `GRAPH_MODEL.md` 的「NEXT 流搜索的三条规则」）：
 
 ```cypher
-MATCH p=(a:Symbol)-[:REFERENCES*1..5]->(b:Symbol)
-WHERE a.name = 'foo'
-RETURN p
+MATCH (m:Method {projectId:$project, name:'intercept'})
+MATCH p=(m)-[:NEXT*]->(x {projectId:$project})
+UNWIND relationships(p) AS r WITH DISTINCT r
+MATCH (a)-[r]->(b) RETURN a, r, b
 ```
 
-返回的 Path 在后端序列化成 nodes/edges JSON，Three.js 按 3D 渲染。
+返回的 Path/Node/Relationship 在后端序列化成 nodes/edges JSON，Three.js 按 3D 渲染。
 
 ## 6. 持久化方案（核心要求）
 
@@ -192,9 +207,13 @@ services:
 ## 9. 实现状态
 
 - [x] `docker/scip/` 网关（HTTP job 服务 + scip/indexers）
-- [x] backend 新工具：`generate_scip_index` / `query_graph`（fork 聚合期直写 Neo4j，`import_to_graph` 已移除）
-- [x] `apps/graph-app/` Three.js 3D 渲染页（:18081）
+- [x] backend 图谱工具：`generate_scip_index` / `query_graph` / `expand_called_method` / `new_graph` / `get_graph_history`
+- [x] `apps/graph-app/` Three.js 3D 渲染页（:18081，含代码查看器 / 节点右键菜单 / 定位 Neo4j 节点）
 - [x] docker-compose 扩 3 services + `scripts/deploy-graph.sh`
-- [x] Neo4j 图模型 + UNWIND 批量导入脚本（`neo4j.service.ts` 建普通索引，Community 兼容）
+- [x] **fork 聚合期直写 Neo4j**（`import_to_graph`、`buildImportStatements`、`scip print --json` 导入链**已删除**，
+      唯一入库路径是 fork 直写；`/api/index/:project` 保留给调试控制台的 SCIP 索引查看器）
+- [x] **匿名内部类 / 局部类接线**（`Value-DEFINES->Class` 等；`codeorder` 扩一跳带出）+ **`DECLARES` 更名 `DEFINES`**
+- [x] **聚合可复现**：并行段不写共享状态、按分片顺序折叠（`--parallel` 与 `--no-parallel` 产出逐字节一致）
 
-已通过端到端验证：scip-typescript 生成 index.scip 并经 `scip print --json` 导入 5 个 Symbol + 4 条 REFERENCES；`query_graph` 对路径/关系/节点三种 cypher 返回均能抽出节点与边生成视图快照。
+已通过端到端验证：`deploy-graph.sh --scip-java <fork> okhttp` 全流程（Gradle 编译 → fork 聚合直写 → backend 工具可用），
+12 种边逐次重索引计数一致（节点 302,431 / 边 607,066）；`query_graph` 的 preset 与自定义 cypher 均能生成视图快照。

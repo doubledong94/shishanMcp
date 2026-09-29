@@ -65,9 +65,9 @@
 
 | 正则字符 | 旧谓词 | 绑定 | 新项目 cypher 片段 |
 | --- | --- | --- | --- |
-| `Field` | `nodeFieldOf(ClassScope, Field)` | 类范围里的字段 | `MATCH (:Class{...})-[:DECLARES]->(f:Field)` |
-| `Method` | `nodeMethodOf(ClassScope, Method)` | 类范围里的方法 | `MATCH (:Class{...})-[:DECLARES]->(m:Method)` |
-| `Constructor` | `nodeConstructorOf(ClassScope, Ctor)` | 构造器 | `MATCH (:Class{...})-[:DECLARES]->(m:Method{isConstructor:true})` |
+| `Field` | `nodeFieldOf(ClassScope, Field)` | 类范围里的字段 | `MATCH (:Class{...})-[:DEFINES]->(f:Field)` |
+| `Method` | `nodeMethodOf(ClassScope, Method)` | 类范围里的方法 | `MATCH (:Class{...})-[:DEFINES]->(m:Method)` |
+| `Constructor` | `nodeConstructorOf(ClassScope, Ctor)` | 构造器 | `MATCH (:Class{...})-[:DEFINES]->(m:Method{isConstructor:true})` |
 | `Instance` | `nodeInstanceOf(ClassScope, Class, Instance)` | 类型为 C 的字段/参数/返回 | 类型在声明属性（`Field.type`/`Value.kind`）；`TYPED_BY` 边**未实现**（见 §11.3） |
 | `Parameter` | `nodeParameterOf(Method, Param)` | 方法形参 | `MATCH (:Method{...})-[:HAS_PARAM]->(p:Value{kind:'PARAM'})` |
 | `Return` | `nodeReturnOf(Method, Return)` | 方法返回值 | 方法返回值槽：`(:Value{kind:'RETURN'})`（`RETURNS` 边**未实现**，见 §11.3） |
@@ -218,10 +218,10 @@ RETURN a, r, b
 | 轴 | 维度 | 核心/骨架边 | 入口边 | 出口边 | preset |
 | --- | --- | --- | --- | --- | --- |
 | 时序轴 | **时机（主轴）** | 事件链 `(X)-[:NEXT]->(Y)`（**仅在单个方法体内**） | `(:Method)-[:NEXT]->(方法体首事件)`；分支入口 `(:Condition)-[:NEXT]->(then首事件)` | 函数尾 = 本方法 `return` 向的 NEXT 链尾；**不跨函数**（被调方法的时序在其自身以 `Method` 为链首的 NEXT 链内，跨函数由 `CALLS` 表达） | `codeorder` |
-| 时序轴 | **时机的分形（调用）** | `(:CalledMethod)-[:CALLS]->(:Method)` | `(:Method)-[:NEXT*]->(:CalledMethod)`、`(:Value)-[:PARAM_TO_METHOD]->(:CalledMethod)` | — | `calls`/`callers` |
+| 时序轴 | **时机的分形（调用）** | `(:CalledMethod)-[:CALLS]->(:Method)` | `(:Method)-[:NEXT*]->(:CalledMethod)`、`(:Value)-[:PARAM_TO_METHOD]->(:CalledMethod)` | — | （`calls`/`callers` preset 已删，用裸查询） |
 | 数据轴 | **数据（主轴）** | `(:Value)-[:FLOWS]->(:Value)` | — | 进出调用：`(:Value)-[:PARAM_TO_METHOD]->(:CalledMethod)`（进）、`(:CalledMethod)-[:METHOD_TO_RETURN]->(:Value)`（出） | `dataflow` |
 | 数据轴 | **数据的分形（成员访问/下标）** | `(:Value)-[:REF]->(:CalledMethod\|:Value)`、`(:Value)-[:INDEX]->(:Value{kind:'INDEX'})` | — | — | `nesting` |
-| — | **逻辑** | 条件树：`(:Condition)->(:Condition)`（分支流向由 NEXT 表达；方法级锚点是 `(:Method)-[:NEXT]->(首个运行时事件)`） | `(:Value)-[:CONTROLS]->(:Condition)` | `(:Condition)-[:NEXT*]->(:CalledMethod)` | `controls` |
+| — | **逻辑** | 条件树：`(:Condition)->(:Condition)`（分支流向由 NEXT 表达；方法级锚点是 `(:Method)-[:NEXT]->(首个运行时事件)`） | `(:Value)-[:CONTROLS]->(:Condition)` | `(:Condition)-[:NEXT*]->(:CalledMethod)` | `order_true` / `order_false` |
 
 - **时机（主轴）**：核心 `NEXT` 事件链，链首为该方法的 `Method` 节点（`Method-[:NEXT]->方法体首事件`）；分支入口 `Condition-[:NEXT]->(then首事件)`。**NEXT 只在单个方法体内**——被调方法的时序由它自身以 `Method` 为链首的 NEXT 链表达，调用点经 `CALLS` 关联到被调方法；不建立"被调首事件 / 被调退出→calledReturn"这类跨函数 NEXT（否则从某方法 `Method` 沿 NEXT 可达会漏到别的函数，无法按函数限域）。
 - **时机的分形（调用）**：核心 `CALLS`（CalledMethod→Method）。与逻辑/数据/数据的分形的接缝都在调用点——`NEXT` 从条件进来，实参 `PARAM_TO_METHOD` / 返回 `METHOD_TO_RETURN` 让数据进出调用，`REF` 也能引到它。是循环里被多维度汇聚的枢纽。
@@ -267,10 +267,12 @@ RETURN a, r, b
 
 | 边 | 起点→终点 | 作用 | 用途 |
 | --- | --- | --- | --- |
-| `DECLARES` | `Class→Method\|:Field` | 声明成员 | 类范围：找某类的字段/方法 |
-| `HAS_PARAM` | `Method→Value`（PARAM） | 方法形参 | `Parameter` 正则字符绑定 |
-| `EXTENDS` | `Class→Class` | 继承 | **类型层次/类范围**（super/sub/ancestors/descendants） |
-| `OVERRIDES` | `Method→Method` | 覆写 | **多态**：时序轴/数据轴的 override 变体（`polymorphism` preset） |
+| `DEFINES` | `Class→Method\|:Field` | 定义成员 | 类范围：找某类的字段/方法 |
+| `DEFINES` | `Class→Class` | 嵌套类定义 | 类范围（**不含**局部类归属边，见 `EDGE_TODO.md` §2.4） |
+| `DEFINES` | `Value→Class` | 对象字面量站点 → 匿名类 | **进匿名内部类的入口**（见 §11.4） |
+| `HAS_PARAM` | `Method→Value`（PARAM） | 方法形参（含局部方法） | `Parameter` 正则字符绑定 |
+| `EXTENDS` | `Class→Class` | 继承（含局部类→基类型） | **类型层次/类范围**（super/sub/ancestors/descendants） |
+| `OVERRIDES` | `Method→Method` | 覆写（**局部方法不建**） | **多态**：时序轴/数据轴的 override 变体（`polymorphism` preset） |
 
 > 下表中的 `RETURNS`/`IMPLEMENTS`/`TYPED_BY` 在 `GraphModel` 里有常量、但**从未建过边**
 > （okhttp 实测计数为 0）——旧项目对应物 `Return`/`instanceOf` 的绑定目前只做到 `HAS_PARAM` 那一层。
@@ -291,8 +293,29 @@ RETURN a, r, b
 | `NEXT` | `Method`/`Condition`→`Value`/`CalledMethod` | 统一锚定边：`Method`→方法体首事件是方法入口；条件→运行时 Value/调用点锚定到其包围条件（恒发） |
 
 > 结论：两轴维度 = 流动/传递方向（时序轴 `NEXT`/`CALLS`、数据轴 `FLOWS`/`REF`/`INDEX`）+ 独立逻辑（条件树）；
-> 未纳入的或是静态结构与类型层次（`DECLARES`/`HAS_PARAM`/`EXTENDS`/`OVERRIDES`）——
+> 未纳入的或是静态结构与类型层次（`DEFINES`/`HAS_PARAM`/`EXTENDS`/`OVERRIDES`）——
 > 为维度提供节点集合与类型信息，或是维度交接的接头/锚（`PARAM_TO_METHOD`/`NEXT`——运行时节点的条件锚定统一走 `NEXT`）。
+
+### 11.4 匿名内部类：`codeorder` 的"扩一跳"
+
+匿名对象（`object : X { … }`）的节点是 **per-file 局部符号 `local N`**，
+符号里没有父子关系，历史上整棵子树与图断连。现在接法（`presets.ts` 的 `bodyTail()`，**只扩一跳**）：
+
+```
+body 内的对象字面量实例 Value
+  ──DEFINES──▶ 匿名类 Class ──DEFINES──▶ 成员 Method/Field ──NEXT*──▶ 成员方法体
+```
+
+要点：
+
+- **只扩一跳**：`anonClasses` 只从 `full`（函数体 + 运算符节点）内的实例站点取，不递归进匿名类里的匿名类——
+  嵌套匿名类在它自己的函数体里，按函数限域，不该在父函数体里展开。
+- **不带基类型**：`EXTENDS`（`Class→基类型 Class`）**不画**——那会把图拉出方法体，与本 preset
+  "这个函数体内发生了什么" 的语义相悖；要看继承/实现用 `types` / `ancestors` / `descendants`。
+- **`NEXT*` 自然收敛**：`NEXT` 不跨方法，故成员方法的 `NEXT*` 展开正好是那个方法体。
+- **无匿名类时行为不变**：所有新增 `OPTIONAL MATCH` 用 `collect()`（会跳过 null），无命中即 `[]`，`full2 == full`。
+- 实测（okhttp `CallServerInterceptor.intercept`）：`codeorder` 从 400 节点 / 598 边涨到
+  **423 节点 / 629 边**（最后一次重索引后），带出 `<anonymous>`、成员 `peek`/`get` 及两个方法体。
 
 ## 12. 已实现 / 待实现对照
 

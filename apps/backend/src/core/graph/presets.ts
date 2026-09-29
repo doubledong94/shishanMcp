@@ -52,6 +52,16 @@
  * 目标节点拉进来：本 preset 的语义是"这个函数体内发生了什么"，`exchange → connection`
  * 的 connection 声明在别的文件里，拉进来会让图超出方法体。实测 REF 这样保留 134/172 条。
  *
+ * <p><b>匿名内部类扩一跳</b>（2026-09-29 加）：函数体里的 `object : X { … }` 此前**整棵子树都进不了图**
+ * —— 匿名类的节点是 per-file 局部符号 `local N`，与图断连。现在沿
+ * {@code (:Value)-[:DEFINES]->(:Class)}（对象字面量站点 → 它定义的匿名类）把它们接进来，再取
+ * 该类的成员（{@code DEFINES}）与成员方法的 NEXT 链（`NEXT` 不跨方法，故正好是那个方法体）。
+ * **不带**它实现的基类型（{@code EXTENDS}）：那会把图拉出方法体，本 preset 的语义是"这个函数体内
+ * 发生了什么"，基类型要看用 `types`/`ancestors` 之类另行查。
+ *
+ * <p>只扩<b>一跳</b>：`anonClasses` 只从 `full` 内的实例站点取，不递归进匿名类里的匿名类
+ * （嵌套匿名类在它自己的函数体里，按函数限域，不该在父函数体里展开）。
+ *
  * @param anchor body 的锚点变量名（codeorder 是 `m`，order_* 是 `c`）
  */
 export function bodyTail(anchor: string): string {
@@ -60,8 +70,18 @@ export function bodyTail(anchor: string): string {
     "WHERE o.file CONTAINS $file AND y IN body " +
     `WITH ${anchor}, body, collect(DISTINCT o) AS ops ` +
     `WITH ${anchor}, body + [x IN ops WHERE x IS NOT NULL] AS full ` +
-    "UNWIND full AS a MATCH (a)-[r:NEXT|FLOWS|REF|CONTROLS|PARAM_TO_METHOD|METHOD_TO_RETURN]->(b) " +
-    "WHERE b IN full AND NOT (r:NEXT AND ((a)-[:FLOWS]->(b) OR (a)-[:REF]->(b))) RETURN a, r, b"
+    // 匿名类：站点(在 full 内) → 类 → 成员 → 成员方法体。collect() 会跳过 null，
+    // 故无匿名类时各 collect 均为 []，full2 == full，行为与旧版一致。
+    "OPTIONAL MATCH (site:Value)-[:DEFINES]->(ac:Class) WHERE site IN full " +
+    `WITH ${anchor}, full, collect(DISTINCT ac) AS anonClasses ` +
+    "OPTIONAL MATCH (ac2:Class)-[:DEFINES]->(mem) WHERE ac2 IN anonClasses " +
+    `WITH ${anchor}, full, anonClasses, collect(DISTINCT mem) AS anonMembers ` +
+    "OPTIONAL MATCH (mm:Method)-[:NEXT*]->(mv) WHERE mm IN anonMembers " +
+    `WITH ${anchor}, full, anonClasses, anonMembers, collect(DISTINCT mv) AS memberBody ` +
+    `WITH ${anchor}, full + anonClasses + anonMembers + memberBody AS full2 ` +
+    "UNWIND full2 AS a MATCH (a)-[r:NEXT|FLOWS|REF|CONTROLS|PARAM_TO_METHOD|METHOD_TO_RETURN|DEFINES]->(b) " +
+    "WHERE b IN full2 AND NOT (r:NEXT AND ((a)-[:FLOWS]->(b) OR (a)-[:REF]->(b))) " +
+    "RETURN DISTINCT a, r, b"
   );
 }
 
@@ -70,13 +90,15 @@ export const PRESETS: Record<string, { description: string; needsParam: boolean;
     description: "数据的分形：某实例引用出发的 引用→调用点→被调方法（需 param=值名）",
     needsParam: true,
     cypher:
-      "MATCH p=(v:Value {projectId:$project, name:$name})-[:REF]->(cm:CalledMethod)-[:CALLS]->(m:Method) RETURN p",
+      "MATCH p=(v:Value {projectId:$project, name:$name})-[:REF]->(cm:CalledMethod)-[:CALLS]->(m:Method) " +
+      "WHERE v.file CONTAINS $file RETURN p",
   },
   dataflow: {
     description: "数据流：某值出发的值→值链（需 param=值名）",
     needsParam: true,
     cypher:
-      "MATCH p=(a:Value {projectId:$project, name:$name})-[:FLOWS*]->(b:Value {projectId:$project}) RETURN p",
+      "MATCH p=(a:Value {projectId:$project, name:$name})-[:FLOWS*]->(b:Value {projectId:$project}) " +
+      "WHERE a.file CONTAINS $file RETURN p",
   },
   types: {
     description: "类继承关系：某类的直接父类（需 param=类名）",
@@ -113,7 +135,8 @@ export const PRESETS: Record<string, { description: string; needsParam: boolean;
       "相交：数据流(值→实参) ∩ 数据的分形(实例→调用) 汇聚于同一调用点（需 param=值名，锚定数据流起点）",
     needsParam: true,
     cypher:
-      "MATCH (v1:Value {projectId:$project, name:$name})-[:FLOWS]->(cp:Value {projectId:$project,kind:'CALLED_PARAM'})-[:PARAM_TO_METHOD]->(cm:CalledMethod)-[:CALLS]->(m:Method) MATCH (v2:Value {projectId:$project})-[:REF]->(cm) RETURN v1, cp, cm, m, v2",
+      "MATCH (v1:Value {projectId:$project, name:$name})-[:FLOWS]->(cp:Value {projectId:$project,kind:'CALLED_PARAM'})-[:PARAM_TO_METHOD]->(cm:CalledMethod)-[:CALLS]->(m:Method) MATCH (v2:Value {projectId:$project})-[:REF]->(cm) " +
+      "WHERE v1.file CONTAINS $file RETURN v1, cp, cm, m, v2",
   },
   codeorder: {
     description:
@@ -125,6 +148,8 @@ export const PRESETS: Record<string, { description: string; needsParam: boolean;
       "CONTROLS 也与 NEXT 共存（守卫关系与时序是两件事，让位就丢了\"谁守卫了这个分支\"）；" +
       "PARAM_TO_METHOD/METHOD_TO_RETURN 同理共存（数据进出调用点是独立语义）。" +
       "REF/CONTROLS/PARAM_TO_METHOD/METHOD_TO_RETURN 只画两端都在方法体内的，不把体外目标拉进来。" +
+      "函数体里的匿名内部类（`object : X {…}`）扩一跳带进来：DEFINES 实例站点→匿名类、匿名类→成员、" +
+      "成员方法的 NEXT 链（不含它实现的基类型，那会拉出方法体）。" +
       "同名方法多时会一起锚定（okhttp 有 18 个 intercept），用 file 收窄到某一个",
     needsParam: true,
     cypher:
