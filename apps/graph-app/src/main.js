@@ -2715,26 +2715,44 @@ async function expandCalledMethod(id) {
   }
 }
 
-/** 把新查询到的节点/边并入当前状态（按 id 去重）。 */
+/**
+ * 把新查询到的节点/边并入当前状态。
+ *
+ * <p><b>身份键必须用 `stableId`，不能用 `id`</b>：`id` 是 `node-<Neo4j 内部 identity>`，而 identity
+ * **每次重建索引都会变**；工作图/快照里存的是当时那个值。按 `id` 去重的话，重索引之后同一个逻辑节点
+ * 会被当成两个——典型表现就是「展开函数」后**多出一个被展开的 CalledMethod 节点**（展开查询返回的是
+ * 当前 DB 的新 identity，而图里那个还是旧的）。
+ *
+ * <p>这里与后端的 `mergeGraphs` 保持同一套语义：键 `stableId || id`、**保留已有节点的 id**、
+ * 并把新来边的端点**改写到保留的那份**（否则边会指向被丢弃的副本 id，`rebuildEdges` 里两端不齐就整条不画）。
+ */
 function mergeView(view) {
   const nodes = view.nodes || [];
   const edges = view.edges || [];
-  const seenNode = new Set(state.nodes.map((n) => n.id));
+  const keyToId = new Map(); // 身份键 → 已保留节点的 id
+  const idRemap = new Map(); // 被丢弃副本的 id → 保留的 id
+  for (const n of state.nodes) keyToId.set(n.stableId || n.id, n.id);
   for (const n of nodes) {
     // 跳过后端为"纯标量查询结果"捏的 Result 占位节点，不展示、不污染工作图
-    if (n && n.kind === "Result") continue;
-    if (!seenNode.has(n.id)) {
+    if (!n || n.kind === "Result") continue;
+    const key = n.stableId || n.id;
+    const kept = keyToId.get(key);
+    if (kept === undefined) {
+      keyToId.set(key, n.id);
       state.nodes.push(n);
-      seenNode.add(n.id);
+    } else if (kept !== n.id) {
+      idRemap.set(n.id, kept);
     }
   }
+  const remap = (id) => idRemap.get(id) ?? id;
   const seenEdge = new Set(state.edges.map((e) => `${e.from}->${e.to}->${e.label}`));
   for (const e of edges) {
-    const key = `${e.from}->${e.to}->${e.label}`;
-    if (!seenEdge.has(key)) {
-      state.edges.push(e);
-      seenEdge.add(key);
-    }
+    const from = remap(e.from);
+    const to = remap(e.to);
+    const key = `${from}->${to}->${e.label}`;
+    if (seenEdge.has(key)) continue;
+    seenEdge.add(key);
+    state.edges.push(from === e.from && to === e.to ? e : { ...e, from, to });
   }
 }
 
