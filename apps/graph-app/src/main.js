@@ -1026,6 +1026,8 @@ const EDGE_DIM_OF = {
   // 但能区分"的青绿。
   PARAM_TO_METHOD: "callJoint",
   METHOD_TO_RETURN: "callJoint",
+  // 定义（声明层骨架）：类↔成员、对象字面量站点↔匿名类。见 EDGE_DIM_COLOR.defines 的选色说明。
+  DEFINES: "defines",
 };
 /** 按 sRGB 十六进制构色，跳过 ColorManagement 的 sRGB→线性转换。
  *  本应用边用自定义 ShaderMaterial 原样输出颜色，若 new THREE.Color(0x…) 把它转成线性，
@@ -1049,9 +1051,21 @@ const EDGE_DIM_COLOR = {
                                     // 仍属绿族），明度保持 L=40% 不压暗，ΔE 拉到 31.4；
                                     // 与"时机青"(187°) 仍有 ΔE≈34，不混淆
   logic:         srgbHex(0x2f80ed), // 亮蓝   逻辑 条件树（独立，理性蓝）
+  defines:       srgbHex(0xe23298), // 品红   定义 DEFINES（类↔成员 / 对象字面量站点↔匿名类）。
+                                    // 选色理由：① 语义——"定义"是**声明层骨架**（类型/结构），
+                                    //   编辑器配色传统里类型名惯用紫/品红系（抽象、结构、非动作），
+                                    //   与"时机青(动作/流动)""数据绿""逻辑蓝"在心理语义上不冲突；
+                                    //   特意避开红（危险/错误）与橙（警告，已被"假/else 路径"占用）。
+                                    // ② 可辨——品红是全表唯一没被占用的色族：紫被 `_EDGE_EXC`
+                                    //   catch 异常边占了（0x8e44ad，色相 278°，与紫罗兰 ΔE 只有 15.7，
+                                    //   所以不能往紫走）；红/玫红虽能拉开 ΔE≈60，但语义不合。
+                                    //   本品红对全部 9 个既有色（含两个语义色）的**最近邻 ΔE=39.4**
+                                    //   （对 catch 异常紫），优于全表现有最小值 24.6（时机↔时机的分形），
+                                    //   也高于本文件此前认可的 31.4 阈值（CIE76 Lab）。
+                                    //   明度 L=54%、饱和 75%：未选中边是 alpha 0.3，低饱和会糊成"其他"灰。
   other:         srgbHex(0x8b949e), // 中性灰 未纳入
 };
-/** 边 label → 维度颜色；未纳入各轴维度的（DEFINES/HAS_PARAM/RETURNS…）归为灰。 */
+/** 边 label → 维度颜色；未纳入的（HAS_PARAM/EXTENDS/OVERRIDES/RETURNS…）归为灰。 */
 function edgeDimColorFor(label, out) {
   const dim = EDGE_DIM_OF[label] || "other";
   out.copy(EDGE_DIM_COLOR[dim]);
