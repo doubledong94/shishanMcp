@@ -235,8 +235,8 @@ FIELD("name", col16, access=write) ──REF──> LOCAL_VAR("currentThread", c
 
 ### 2.4 边之外的已知缺口（不在"边"范畴，仅记录）
 
-- **匿名内部类 / 局部类（`local N`）**：2026-09-29 实测 **321 个局部 `Class` 中 316 个有入边、320 个有出边**
-  （733 个局部方法：718 个有类归属、702 个有出边、678 个有 NEXT 入口边、656 个有 `OVERRIDES`）。剩余缺口均为**正确行为或已知取舍**：
+- **匿名内部类 / 局部类（`local N`）**：2026-09-29 实测 **333 个局部 `Class` 中 328 个有入边**（321 Kotlin + 12 Java），
+  **733 个局部方法全部有入边**（714 Kotlin + 19 Java），14 个局部字段中 8 个有入边。剩余缺口均为**正确行为或已知取舍**：
   - **5 个局部 `Class` 无入边（不可达）= 具名局部类**：`local final class Effects / ValidRequestBody /
     ErringRequestBody / StreamingBody / DisconnectingCookieJar`。它们用 `class X : Y {…}` 声明、**没有对象字面量**，
     因此拿不到 `Value-DEFINES->Class`（该边数据源只有 `OBJECT_LITERAL`）。连同其 **8 个成员方法**不可达。
@@ -250,7 +250,13 @@ FIELD("name", col16, access=write) ──REF──> LOCAL_VAR("currentThread", c
   - 17 个无 CALLS 出边的 `local N` 调用点 = **目标不是方法**：匿名/局部类的**构造**
     （构造器有自己独立的 local 编号：类 `local 11` / 构造点 `local 12`）、或在匿名对象上调用**继承来**的成员
     （`cache.computeIfAbsent(...)`）；这些 `local N` 在库里没有任何节点。
-  - **Java 匿名类完全没有节点**（局部 Class 全来自 Kotlin）：javac 侧的匿名类定义未物化。
+  - **Java 匿名类已物化**（2026-09-29 修，此前 0 个）：根因在 javac visitor 的 `resolveClassTree`——
+    它用 `getSimpleName().length() > 0` 做前提，而匿名类的 simpleName 是空串，于是**整类跳过、不发出定义
+    occurrence**，导致匿名类本身没有符号、没有节点；它的成员（19 个方法 + 7 个字段）虽已物化，但没有归属、
+    从图上进不去。修法：为匿名类补一条定义 occurrence（无名字可用，range 取**节点自身跨度**，
+    `computeRange` 在 name==null 时不做名字搜索）、displayName 统一成 `<anonymous>`。
+    实测：12 个 Java 匿名类，入边 = 构造点的 `CALLED_RETURN`（`Value-DEFINES->Class`，12 条）、
+    出边 = 26 条成员（19 方法 + 7 字段）+ 9 条 `EXTENDS`。承载体全在 `samples/`（okhttp 自身 Java 代码里没有匿名类）。
   - **346 条边建不出来**（writer 一行告警报出条数）：它们的端点节点不存在——指向已被跳过的类型参数、
     或库外符号。这些边本就无法建，不影响图。
 - **孤立节点约 6,600 个**：`LITERAL` 2,605 / `PARAM` 2,061 / `Method` 1,041 / `FIELD` 536 / `Class` 339 等（用户先前说"以后再说"）。
